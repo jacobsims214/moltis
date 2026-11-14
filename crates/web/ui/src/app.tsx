@@ -48,6 +48,7 @@ import { insertSessionInOrder, sessionStore } from "./stores/session-store";
 import { initTheme, injectMarkdownStyles } from "./theme";
 import type { VaultStatus } from "./types/gon";
 import { GlobalDialogs, Toasts } from "./ui";
+import { initUxShell } from "./ux-shell";
 import { connect } from "./websocket";
 import * as _wsConnect from "./ws-connect";
 
@@ -158,6 +159,7 @@ injectMarkdownStyles();
 initHighlighter();
 initPWA();
 initMobile();
+initUxShell();
 const i18nReady = initI18n()
 	.then(() => {
 		translateStaticElements(document.documentElement);

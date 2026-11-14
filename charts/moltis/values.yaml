@@ -51,6 +51,10 @@ defaults:
     # Or set it inline (rendered into a chart-managed Secret).
     value: ""
 
+  # Skip Moltis's first-run wizard: the chart already seeds the LLM, user
+  # profile and password, which is what the wizard collects.
+  skipOnboarding: true
+
   # Unsandboxed shell in the web UI. Inside Kubernetes this is a shell in the
   # instance's own pod; off by default for family instances.
   terminal: false

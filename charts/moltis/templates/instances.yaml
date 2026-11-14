@@ -114,6 +114,10 @@ spec:
                 echo "moltis.toml exists, leaving it (configOverwrite=false)"
               fi
               {{- end }}
+              {{- if $c.skipOnboarding }}
+              # The SPA router only checks this marker (not SKIP_ONBOARDING).
+              touch /home/moltis/.moltis/.onboarded
+              {{- end }}
               {{- if $c.mcpServers }}
               if [ ! -f /home/moltis/.moltis/mcp-servers.json ]; then
                 cp /seed/mcp-servers.json /home/moltis/.moltis/mcp-servers.json
@@ -138,6 +142,10 @@ spec:
               value: "true"
             - name: MOLTIS_NO_TLS
               value: "true"
+            {{- if $c.skipOnboarding }}
+            - name: SKIP_ONBOARDING
+              value: "1"
+            {{- end }}
             {{- if not $c.terminal }}
             - name: MOLTIS_TERMINAL_DISABLED
               value: "true"

@@ -1,0 +1,502 @@
+/* ── Shell refresh ─────────────────────────────────────────────
+ * Loaded last (injected by ux-shell.ts) and unlayered, so it wins over both
+ * the legacy css/*.css rules and the Tailwind @layer output. Mobile-first:
+ * one header (menu · title · new chat), a left drawer for chats, plain
+ * replies, compact tool chips and an app-like composer.
+ */
+
+/* ── Palette ─────────────────────────────────────────────── */
+html.ux-shell[data-theme="light"],
+html.ux-shell:not([data-theme="dark"]) {
+  --bg: #faf8f5;
+  --bg-elevated: #ffffff;
+  --bg-hover: #efeae2;
+  --surface: #f4f1ec;
+  --surface2: #ffffff;
+  --text: #2a2723;
+  --text-strong: #1f1d1a;
+  --muted: #77706a;
+  --border: #e6e1d8;
+  --border-strong: #d6cfc4;
+  --accent: #c2591f;
+  --accent-hover: #a84b18;
+  --accent-dim: #a84b18;
+  --accent-subtle: rgba(194, 89, 31, 0.1);
+  --user-bg: #efeae2;
+  --user-border: transparent;
+  --assistant-bg: transparent;
+  --assistant-border: transparent;
+}
+html.ux-shell[data-theme="dark"] {
+  --accent: #e07a3e;
+  --accent-hover: #ea8d55;
+  --accent-dim: #c76a32;
+  --accent-subtle: rgba(224, 122, 62, 0.14);
+  --user-bg: #262a33;
+  --user-border: transparent;
+  --assistant-bg: transparent;
+  --assistant-border: transparent;
+}
+
+html.ux-shell body {
+  background: var(--bg);
+}
+
+/* ── Desktop header: keep it quiet ───────────────────────── */
+html.ux-shell #memoryInfo,
+html.ux-shell .header-actions .header-link-btn:not(#settingsBtn) {
+  display: none;
+}
+html.ux-shell .mobile-chat-title,
+html.ux-shell #mobileNewChatBtn,
+html.ux-shell #sessionsPanel .drawer-head,
+html.ux-shell #sessionsPanel .drawer-new-chat,
+html.ux-shell #sessionsPanel .drawer-foot {
+  display: none;
+}
+
+/* Update notice: a slim strip, never a full-width billboard */
+html.ux-shell #updateBanner.info-banner {
+  font-size: 12px;
+  padding: 6px 12px;
+  line-height: 1.4;
+  background: var(--surface);
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+html.ux-shell #updateBanner.info-banner a {
+  color: var(--accent);
+}
+
+/* ── Messages ────────────────────────────────────────────── */
+/* Centred ~760px reading column on wide screens, full width on phones. */
+html.ux-shell #messages {
+  padding-inline: max(16px, calc((100% - 760px) / 2));
+  gap: 14px;
+}
+html.ux-shell .msg {
+  font-size: 15px;
+  line-height: 1.6;
+}
+html.ux-shell .msg.user {
+  background: var(--user-bg);
+  border: 0;
+  border-radius: 18px 18px 4px 18px;
+  padding: 10px 14px;
+  max-width: min(82%, 620px);
+}
+html.ux-shell .msg.assistant {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 2px 2px 0;
+  max-width: 100%;
+  width: 100%;
+}
+/* Reasoning on a final reply: a quiet disclosure, not a grey slab */
+html.ux-shell .msg.assistant .msg-reasoning {
+  background: transparent;
+  border: 0;
+  margin-top: 6px;
+}
+html.ux-shell .msg.assistant .msg-reasoning-summary {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 0;
+}
+
+/* Footer: model · duration, left-aligned, with the actions beside it */
+html.ux-shell .msg-model-footer {
+  text-align: left;
+  justify-content: flex-start;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 6px;
+}
+html.ux-shell .msg-action-bar {
+  margin-top: 2px;
+  gap: 2px;
+}
+html.ux-shell .msg-action-btn {
+  color: var(--muted);
+}
+
+/* Tool calls: compact one-line chips instead of terminal cards */
+html.ux-shell .msg.exec-card {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  box-shadow: none;
+}
+html.ux-shell .msg.exec-card .exec-prompt {
+  font-size: 12.5px;
+  gap: 6px;
+}
+html.ux-shell .msg.exec-card .exec-prompt-char {
+  color: var(--accent);
+}
+html.ux-shell .msg.exec-card .msg-reasoning {
+  display: none;
+}
+html.ux-shell .msg.exec-card .exec-output {
+  max-height: 160px;
+  overflow: auto;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+/* ── Composer ────────────────────────────────────────────── */
+html.ux-shell .chat-composer {
+  background: var(--surface2);
+  border: 1px solid var(--border-strong);
+  border-radius: 22px;
+  box-shadow: 0 1px 2px rgba(31, 29, 26, 0.05);
+}
+html.ux-shell .chat-composer-textarea {
+  font-size: 16px; /* < 16px makes iOS Safari zoom the page on focus */
+}
+html.ux-shell .chat-composer-send-btn {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 999px;
+}
+html.ux-shell .chat-composer-send-btn:disabled {
+  opacity: 0.45;
+}
+html.ux-shell .chat-input-row {
+  padding-inline: max(12px, calc((100% - 784px) / 2));
+}
+
+/* ── Sidebar (desktop) ───────────────────────────────────── */
+html.ux-shell #sessionsPanel {
+  background: var(--surface);
+}
+
+/* ── Phone ───────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  @supports (height: 100dvh) {
+    html.ux-shell,
+    html.ux-shell body {
+      height: 100dvh;
+    }
+  }
+
+  /* One header row: menu · chat title · new chat */
+  html.ux-shell body > header {
+    gap: 4px;
+    min-height: 56px;
+    padding: calc(var(--safe-top, 0px) + 4px) 8px 4px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+  }
+  html.ux-shell body > header > *:not(#mobileMenuBtn):not(#mobileChatTitle):not(#mobileNewChatBtn) {
+    display: none !important;
+  }
+  html.ux-shell #mobileMenuBtn,
+  html.ux-shell .mobile-header-btn {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-strong);
+    order: 0;
+  }
+  html.ux-shell #mobileMenuBtn {
+    order: -1;
+  }
+  html.ux-shell .mobile-chat-title {
+    display: block;
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--text-strong);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The chat's own toolbar row (sandbox · archive · share · delete) folds away */
+  html.ux-shell .chat-toolbar {
+    display: none !important;
+  }
+  /* No popup menu: the menu button opens the drawer */
+  html.ux-shell #mobileMenuPanel,
+  html.ux-shell #mobileMenuOverlay {
+    display: none !important;
+  }
+
+  /* Chats drawer from the left */
+  html.ux-shell #sessionsPanel {
+    display: flex !important;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: auto;
+    width: min(86vw, 320px);
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+    border-right: 1px solid var(--border);
+    padding: calc(var(--safe-top, 0px) + 10px) 10px calc(var(--safe-bottom, 0px) + 12px);
+    box-sizing: border-box;
+    transform: translateX(-102%);
+    transition: transform 0.25s ease;
+    z-index: 60;
+    box-shadow: 8px 0 24px rgba(31, 29, 26, 0.14);
+    gap: 6px;
+  }
+  html.ux-shell #sessionsPanel.open {
+    transform: translateX(0);
+  }
+  html.ux-shell #sessionsPanel::before {
+    display: none;
+  }
+  html.ux-shell .sessions-overlay {
+    z-index: 55;
+    background: rgba(31, 29, 26, 0.32);
+  }
+  html.ux-shell #sessionsPanel .drawer-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 4px 0 8px;
+  }
+  html.ux-shell .drawer-brand {
+    font-weight: 600;
+    font-size: 18px;
+    color: var(--text-strong);
+  }
+  html.ux-shell #sessionsPanel .drawer-new-chat {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    height: 44px;
+    border: 0;
+    border-radius: 12px;
+    background: var(--accent);
+    color: #fff;
+    font: 600 15px var(--font-body);
+  }
+  /* The old tiny "+" next to search is redundant with the big button */
+  html.ux-shell #newSessionBtn {
+    display: none;
+  }
+  html.ux-shell #sessionsPanel > div,
+  html.ux-shell #sessionTabBar,
+  html.ux-shell #archivedSessionsRow {
+    border-bottom: 0;
+  }
+  html.ux-shell #sessionSearch {
+    font-size: 16px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: var(--surface2);
+  }
+  html.ux-shell #sessionList .session-item {
+    min-height: 44px;
+    border-radius: 10px;
+  }
+  html.ux-shell #sessionsPanel .drawer-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+  html.ux-shell .drawer-foot-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 44px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--text-strong);
+    font: 15px var(--font-body);
+    text-align: left;
+  }
+  html.ux-shell .drawer-foot-danger {
+    color: var(--error);
+  }
+
+  /* Messages use the full width */
+  html.ux-shell #messages {
+    padding: 16px 16px 8px;
+  }
+  html.ux-shell .msg.exec-card {
+    max-width: 100%;
+  }
+
+  /* Composer hugs the bottom, above the home indicator */
+  html.ux-shell .chat-input-row {
+    padding: 6px 10px calc(var(--safe-bottom, 0px) + 10px);
+  }
+  html.ux-shell #tokenBar {
+    display: none;
+  }
+  html.ux-shell .chat-composer-send-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* Install prompt: a compact card at the top, not a takeover */
+  html.ux-shell #installBanner {
+    position: relative !important;
+    inset: auto !important;
+    margin: 8px 10px 0;
+    padding: 10px 12px !important;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    font-size: 13px;
+    gap: 10px;
+    box-shadow: none;
+  }
+  html.ux-shell #installBanner img {
+    display: none;
+  }
+}
+
+/* ── Chat menu (⋯) ───────────────────────────────────────── */
+html.ux-shell .chat-menu-btn {
+  margin-left: auto;
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+html.ux-shell .chat-menu-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+html.ux-shell .chat-menu-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+}
+html.ux-shell .chat-menu-backdrop.open {
+  display: block;
+}
+html.ux-shell .chat-menu {
+  display: none;
+  position: fixed;
+  z-index: 71;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(31, 29, 26, 0.16);
+  flex-direction: column;
+  gap: 6px;
+}
+html.ux-shell .chat-menu.open {
+  display: flex;
+}
+/* Everything in the menu reads as a list, whatever its original pill style:
+ * containers stack their items, each item is one row (icon · label). */
+html.ux-shell .chat-menu #sessionActionsMount,
+html.ux-shell .chat-menu #sessionActionsMount div:has(> button) {
+  display: flex !important;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+}
+html.ux-shell .chat-menu #sessionActionsMount {
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+html.ux-shell .chat-menu button {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: flex-start;
+  white-space: nowrap;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 10px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  color: var(--text-strong) !important;
+  font-size: 14px !important;
+  text-align: left;
+  gap: 10px;
+}
+html.ux-shell .chat-menu button:hover {
+  background: var(--bg-hover) !important;
+}
+html.ux-shell .chat-menu .chat-session-btn-danger {
+  color: var(--error) !important;
+}
+/* The old toolbar keeps just the chat name, rename and the ⋯ button */
+html.ux-shell .chat-toolbar {
+  gap: 8px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* ── Phone refinements ───────────────────────────────────── */
+@media (max-width: 767px) {
+  html.ux-shell #updateBanner {
+    display: none !important;
+  }
+  html.ux-shell #sessionTabBar,
+  html.ux-shell #archivedSessionsRow {
+    display: none !important;
+  }
+  /* The chat title opens the chat menu: show it as a control */
+  html.ux-shell .mobile-chat-title {
+    cursor: pointer;
+  }
+  html.ux-shell .mobile-chat-title:not(:empty)::after {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin: 0 0 3px 7px;
+    border-right: 1.8px solid var(--muted);
+    border-bottom: 1.8px solid var(--muted);
+    transform: rotate(45deg);
+  }
+  /* Chat menu as a bottom sheet */
+  html.ux-shell .chat-menu {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto !important;
+    max-width: none;
+    border-radius: 20px 20px 0 0;
+    padding: 14px 12px calc(var(--safe-bottom, 0px) + 18px);
+    box-shadow: 0 -8px 24px rgba(31, 29, 26, 0.14);
+  }
+  html.ux-shell .chat-menu-backdrop.open {
+    background: rgba(31, 29, 26, 0.28);
+  }
+  html.ux-shell .chat-menu button {
+    min-height: 48px;
+    font-size: 15px !important;
+  }
+}

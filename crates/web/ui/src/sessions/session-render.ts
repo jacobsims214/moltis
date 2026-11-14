@@ -15,15 +15,13 @@ import {
 import { highlightCodeBlocks } from "../code-highlight";
 import * as gon from "../gon";
 import {
-	formatAssistantTokenUsage,
-	formatTokenSpeed,
+	buildCompactModelFooter,
 	parseAgentsListPayload,
 	renderAudioPlayer,
 	renderDocument,
 	renderMarkdown,
 	renderScreenshot,
 	sendRpc,
-	tokenSpeedTone,
 	toolCallSummary,
 } from "../helpers";
 import { appendMessageActions } from "../message-actions";
@@ -219,26 +217,7 @@ function renderHistoryUserMessage(msg: UserMsg): HTMLElement | null {
 }
 
 function createModelFooter(msg: AssistantMsg): HTMLDivElement {
-	const ft = document.createElement("div");
-	ft.className = "msg-model-footer";
-	let ftText = msg.provider ? `${msg.provider} / ${msg.model}` : msg.model || "";
-	if (msg.inputTokens || msg.outputTokens) {
-		ftText += ` \u00b7 ${formatAssistantTokenUsage(msg.inputTokens || 0, msg.outputTokens || 0, msg.cacheReadTokens || 0)}`;
-	}
-	const textSpan = document.createElement("span");
-	textSpan.textContent = ftText;
-	ft.appendChild(textSpan);
-
-	const speedLabel = formatTokenSpeed(msg.outputTokens || 0, msg.durationMs || 0);
-	if (speedLabel) {
-		const speed = document.createElement("span");
-		speed.className = "msg-token-speed";
-		const tone = tokenSpeedTone(msg.outputTokens || 0, msg.durationMs || 0);
-		if (tone) speed.classList.add(`msg-token-speed-${tone}`);
-		speed.textContent = ` \u00b7 ${speedLabel}`;
-		ft.appendChild(speed);
-	}
-	return ft;
+	return buildCompactModelFooter(msg);
 }
 
 function renderHistoryAssistantMessage(msg: AssistantMsg): HTMLElement | null {

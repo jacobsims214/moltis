@@ -10,15 +10,13 @@ import {
 	stripChannelPrefix,
 } from "../chat-ui";
 import {
-	formatAssistantTokenUsage,
-	formatTokenSpeed,
+	buildCompactModelFooter,
 	renderAudioPlayer,
 	renderDocument,
 	renderMapLinks,
 	renderMapPointGroups,
 	renderMarkdown,
 	renderScreenshot,
-	tokenSpeedTone,
 	toolCallSummary,
 } from "../helpers";
 import { appendMessageActions } from "../message-actions";
@@ -297,25 +295,7 @@ export function resolveFinalMessageEl(p: ChatPayload): HTMLElement | null {
 
 function createFinalModelFooter(p: ChatPayload): HTMLElement | null {
 	if (!p.model) return null;
-	const footer = document.createElement("div");
-	footer.className = "msg-model-footer";
-	let footerText = p.provider ? `${p.provider} / ${p.model}` : p.model;
-	if (p.inputTokens || p.outputTokens) {
-		footerText += ` \u00b7 ${formatAssistantTokenUsage(p.inputTokens, p.outputTokens, p.cacheReadTokens)}`;
-	}
-	const textSpan = document.createElement("span");
-	textSpan.textContent = footerText;
-	footer.appendChild(textSpan);
-
-	const speedLabel = formatTokenSpeed(p.outputTokens || 0, p.durationMs || 0);
-	if (speedLabel) {
-		const speed = document.createElement("span");
-		speed.className = "msg-token-speed";
-		const tone = tokenSpeedTone(p.outputTokens || 0, p.durationMs || 0);
-		if (tone) speed.classList.add(`msg-token-speed-${tone}`);
-		speed.textContent = ` \u00b7 ${speedLabel}`;
-		footer.appendChild(speed);
-	}
+	const footer = buildCompactModelFooter(p);
 
 	if (p.replyMedium === "voice" || p.replyMedium === "text") {
 		const badge = document.createElement("span");

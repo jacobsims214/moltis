@@ -424,6 +424,53 @@ export function formatTokenSpeed(outputTokens: number | undefined, durationMs: n
 	return `${speed.toFixed(2)} tok/s`;
 }
 
+/** Short model label for the per-message footer: "custom-x::Model" → "Model". */
+export function shortModelName(model: string | undefined): string {
+	if (!model) return "";
+	const tail = model.includes("::") ? model.slice(model.lastIndexOf("::") + 2) : model;
+	return tail.includes("/") ? tail.slice(tail.lastIndexOf("/") + 1) : tail;
+}
+
+/** "41s", "2m 05s" — reply duration for the per-message footer. */
+export function formatReplyDuration(durationMs: number | undefined): string | null {
+	if (!durationMs || durationMs <= 0) return null;
+	const secs = Math.round(durationMs / 1000);
+	if (secs < 60) return `${Math.max(secs, 1)}s`;
+	const m = Math.floor(secs / 60);
+	return `${m}m ${String(secs % 60).padStart(2, "0")}s`;
+}
+
+/**
+ * Compact assistant footer: visible text is just the model and duration;
+ * provider, token usage and speed move to the hover/long-press title.
+ */
+export function buildCompactModelFooter(info: {
+	provider?: string;
+	model?: string;
+	inputTokens?: number;
+	outputTokens?: number;
+	cacheReadTokens?: number;
+	durationMs?: number;
+}): HTMLDivElement {
+	const ft = document.createElement("div");
+	ft.className = "msg-model-footer";
+	const parts = [shortModelName(info.model)];
+	const dur = formatReplyDuration(info.durationMs);
+	if (dur) parts.push(dur);
+	const text = document.createElement("span");
+	text.className = "msg-model-footer-text";
+	text.textContent = parts.filter(Boolean).join(" \u00b7 ");
+	ft.appendChild(text);
+	const detail = [info.provider ? `${info.provider} / ${info.model}` : info.model || ""];
+	if (info.inputTokens || info.outputTokens) {
+		detail.push(formatAssistantTokenUsage(info.inputTokens || 0, info.outputTokens || 0, info.cacheReadTokens || 0));
+	}
+	const speed = formatTokenSpeed(info.outputTokens || 0, info.durationMs || 0);
+	if (speed) detail.push(speed);
+	ft.title = detail.filter(Boolean).join(" \u00b7 ");
+	return ft;
+}
+
 export function tokenSpeedTone(outputTokens: number | undefined, durationMs: number | undefined): string | null {
 	const speed = tokenSpeedPerSecond(outputTokens, durationMs);
 	if (speed == null) return null;
