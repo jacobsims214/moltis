@@ -253,7 +253,17 @@ impl AgentTool for BrowserTool {
         // Browser sandbox mode follows the session sandbox mode from the shared router.
         let session_key = Self::cache_key(params.get("_session_key").and_then(|v| v.as_str()));
         let sandbox_mode = if let Some(ref router) = self.sandbox_router {
+            // A sandboxed browser runs in its own container, so it needs a
+            // backend that can start containers. `restricted-host` (no Docker
+            // or Podman, e.g. on Kubernetes) still counts as sandboxed for
+            // exec, but it has no filesystem isolation and no container
+            // runtime: use the host browser there instead of failing to pull
+            // the browser image.
             router.is_sandboxed(&session_key).await
+                && router
+                    .resolve_backend(&session_key)
+                    .await
+                    .provides_fs_isolation()
         } else {
             debug!(
                 session_key = %session_key,
