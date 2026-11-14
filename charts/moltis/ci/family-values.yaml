@@ -1,0 +1,34 @@
+defaults:
+  timezone: America/New_York
+  llm:
+    name: muse
+    baseUrl: http://192.168.1.204:8000/v1
+    models: [Muse-Glimmer-30B]
+    contextWindows:
+      Muse-Glimmer-30B: 131072
+  ingressRoute:
+    enabled: true
+    tlsSecretName: wildcard-tls
+  networkPolicy:
+    enabled: true
+instances:
+  jacob:
+    displayName: Jacob
+    terminal: true
+    password:
+      existingSecret: moltis-jacob-password
+    ingressRoute:
+      host: moltis-jacob.example.com
+  sam:
+    displayName: Sam
+    password:
+      value: correct-horse-battery
+    ingressRoute:
+      host: moltis-sam.example.com
+    resources:
+      limits:
+        memory: 2Gi
+  retired:
+    enabled: false
+    ingressRoute:
+      enabled: false

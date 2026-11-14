@@ -1,0 +1,8 @@
+Moltis instances in {{ .Release.Namespace }}:
+{{- range $i := (include "moltis.instances" . | fromYamlArray) }}
+  - {{ $i.name }}: service {{ $i.fullname }}:{{ $i.cfg.service.port }}{{ if $i.cfg.ingressRoute.enabled }} → https://{{ $i.cfg.ingressRoute.host }}{{ end }}{{ if not $i.enabled }} (disabled){{ end }}
+{{- end }}
+
+Quick local access:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/<release>-<instance> 13131:13131
+  then open http://localhost:13131 and log in with the instance password.

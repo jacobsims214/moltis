@@ -1,0 +1,16 @@
+apiVersion: v2
+name: moltis
+description: >-
+  Moltis personal agent servers on Kubernetes — one isolated instance per
+  person (own storage, password, hostname), sharing defaults such as an
+  OpenAI-compatible LLM endpoint.
+type: application
+version: 0.1.0
+appVersion: "20261023.01"
+home: https://github.com/moltis-org/moltis
+sources:
+  - https://github.com/jacobsims214/moltis
+keywords:
+  - moltis
+  - agent
+  - llm

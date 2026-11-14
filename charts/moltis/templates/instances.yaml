@@ -1,0 +1,281 @@
+{{- $root := . }}
+{{- range $i := (include "moltis.instances" . | fromYamlArray) }}
+{{- $c := $i.cfg }}
+{{- $ctx := dict "root" $root "i" $i }}
+{{- if and $c.password.value (lt (len $c.password.value) 12) }}
+{{- fail (printf "instance %s: password must be at least 12 characters" $i.name) }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $i.fullname }}-config
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+data:
+  moltis.toml: |
+    {{- include "moltis.configToml" $ctx | nindent 4 }}
+{{- if and $c.password.value (not $c.password.existingSecret) }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $i.fullname }}-password
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+type: Opaque
+stringData:
+  {{ $c.password.existingSecretKey }}: {{ $c.password.value | quote }}
+{{- end }}
+{{- if and $c.persistence.enabled (not $c.persistence.existingClaim) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $i.fullname }}
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+  {{- if $c.persistence.retain }}
+  annotations:
+    helm.sh/resource-policy: keep
+  {{- end }}
+spec:
+  accessModes:
+    - {{ $c.persistence.accessMode }}
+  {{- with $c.persistence.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $c.persistence.size }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $i.fullname }}
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ if $i.enabled }}1{{ else }}0{{ end }}
+  # SQLite on one volume: never run two pods against it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "moltis.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "moltis.selectorLabels" $ctx | nindent 8 }}
+        {{- with $c.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include "moltis.configToml" $ctx | sha256sum }}
+        {{- with $c.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Seed (or, with configOverwrite, replace) moltis.toml on the volume.
+        - name: seed-config
+          image: {{ include "moltis.image" $root }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mkdir -p /home/moltis/.config/moltis /home/moltis/.moltis /home/moltis/.npm
+              {{- if $c.configOverwrite }}
+              cp /seed/moltis.toml /home/moltis/.config/moltis/moltis.toml
+              echo "moltis.toml replaced from chart"
+              {{- else }}
+              if [ ! -f /home/moltis/.config/moltis/moltis.toml ]; then
+                cp /seed/moltis.toml /home/moltis/.config/moltis/moltis.toml
+                echo "moltis.toml seeded from chart"
+              else
+                echo "moltis.toml exists, leaving it (configOverwrite=false)"
+              fi
+              {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: seed
+              mountPath: /seed
+            {{- include "moltis.volumeMounts" $ctx | nindent 12 }}
+      containers:
+        - name: moltis
+          image: {{ include "moltis.image" $root }}
+          imagePullPolicy: {{ $root.Values.image.pullPolicy }}
+          args: ["--bind", "0.0.0.0", "--port", "{{ int $c.service.port }}", "--no-tls"]
+          env:
+            - name: MOLTIS_BEHIND_PROXY
+              value: "true"
+            - name: MOLTIS_NO_TLS
+              value: "true"
+            {{- if not $c.terminal }}
+            - name: MOLTIS_TERMINAL_DISABLED
+              value: "true"
+            {{- end }}
+            {{- if or $c.password.existingSecret $c.password.value }}
+            - name: MOLTIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "moltis.passwordSecretName" $ctx }}
+                  key: {{ $c.password.existingSecretKey }}
+            {{- end }}
+            {{- with $c.llm.apiKeySecret }}
+            {{- if .name }}
+            - name: MOLTIS_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .name }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- end }}
+            {{- with $c.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with $c.envFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ int $c.service.port }}
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            # The image grants passwordless sudo; this makes it inert.
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $c.resources | nindent 12 }}
+          volumeMounts:
+            {{- include "moltis.volumeMounts" $ctx | nindent 12 }}
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: seed
+          configMap:
+            name: {{ $i.fullname }}-config
+        - name: tmp
+          emptyDir: {}
+        - name: state
+          {{- if $c.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "moltis.claimName" $ctx }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with $c.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $c.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $i.fullname }}
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+spec:
+  type: {{ $c.service.type }}
+  selector:
+    {{- include "moltis.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ int $c.service.port }}
+      targetPort: http
+{{- if $c.ingressRoute.enabled }}
+{{- if not $c.ingressRoute.host }}
+{{- fail (printf "instance %s: ingressRoute.host is required" $i.name) }}
+{{- end }}
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ $i.fullname }}
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+spec:
+  entryPoints:
+    {{- toYaml $c.ingressRoute.entryPoints | nindent 4 }}
+  routes:
+    - kind: Rule
+      match: Host(`{{ $c.ingressRoute.host }}`)
+      {{- with $c.ingressRoute.middlewares }}
+      middlewares:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      services:
+        - name: {{ $i.fullname }}
+          port: {{ int $c.service.port }}
+  {{- with $c.ingressRoute.tlsSecretName }}
+  tls:
+    secretName: {{ . }}
+  {{- end }}
+{{- end }}
+{{- if $c.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $i.fullname }}
+  labels:
+    {{- include "moltis.labels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "moltis.selectorLabels" $ctx | nindent 6 }}
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $c.networkPolicy.ingressNamespace }}
+      ports:
+        - port: http
+{{- end }}
+{{- end }}

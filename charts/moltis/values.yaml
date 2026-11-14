@@ -1,0 +1,128 @@
+# Moltis — one isolated agent server per person.
+#
+# `defaults` applies to every entry in `instances`; an instance overrides any
+# part of it (maps merge, lists and scalars replace). Each instance gets its
+# own Deployment, Service, PVC, seed config and (optionally) password Secret
+# and IngressRoute, all named <release>-<instance>.
+
+image:
+  repository: ghcr.io/moltis-org/moltis
+  # Defaults to the chart appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+defaults:
+  # Shown in the UI and used as the onboarding profile.
+  displayName: ""
+  timezone: ""
+  # Agent identity (name/emoji) seeded into moltis.toml.
+  agentName: ""
+  agentEmoji: ""
+
+  # OpenAI-compatible LLM endpoint every instance talks to. Rendered as a
+  # `custom-<name>` provider. Leave baseUrl empty to configure providers in
+  # the UI instead.
+  llm:
+    name: local
+    baseUrl: ""
+    # llama.cpp / vLLM ignore the key, but the provider needs a value. Use
+    # apiKeySecret for a real key.
+    apiKey: "none"
+    apiKeySecret: {}
+    #  name: my-llm-key
+    #  key: api-key
+    models: []
+    # Model ID → context window (tokens).
+    contextWindows: {}
+    # auto | native | text | off
+    toolMode: auto
+    # Only offer this provider in the UI (hides cloud providers).
+    exclusive: true
+
+  # Login. Moltis takes MOLTIS_PASSWORD as the initial password when no
+  # credential exists yet; afterwards the person changes it (or adds a
+  # passkey) in Settings. Minimum 12 characters.
+  password:
+    # Secret holding the password (recommended).
+    existingSecret: ""
+    existingSecretKey: password
+    # Or set it inline (rendered into a chart-managed Secret).
+    value: ""
+
+  # Unsandboxed shell in the web UI. Inside Kubernetes this is a shell in the
+  # instance's own pod; off by default for family instances.
+  terminal: false
+
+  # Command execution sandbox. Kubernetes has no Docker socket to hand out,
+  # so `restricted-host` runs commands inside the instance's own pod (env
+  # cleared, rlimits, unprivileged) — the pod is the isolation boundary.
+  sandboxBackend: restricted-host
+
+  # Moltis rewrites moltis.toml when settings change in the UI, so the
+  # rendered config only seeds a fresh volume. Set to true to overwrite the
+  # file on every start (UI changes to it are then lost on restart).
+  configOverwrite: false
+  # Extra raw TOML appended to the seeded moltis.toml.
+  extraConfigToml: ""
+
+  env: []
+  envFrom: []
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 4Gi
+
+  persistence:
+    # One volume with subPaths: config/, data/, npm/.
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 10Gi
+    existingClaim: ""
+    # Keep the volume when the instance (or release) is removed.
+    retain: true
+
+  service:
+    type: ClusterIP
+    port: 13131
+
+  # Traefik IngressRoute (optional — routes may also live with your Traefik
+  # config). `host` is required per instance when enabled.
+  ingressRoute:
+    enabled: false
+    host: ""
+    entryPoints:
+      - websecure
+    tlsSecretName: ""
+    middlewares: []
+
+  # Only allow ingress from the ingress controller's namespace.
+  networkPolicy:
+    enabled: false
+    ingressNamespace: traefik
+
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  podAnnotations: {}
+  podLabels: {}
+
+instances: {}
+#  jacob:
+#    displayName: Jacob
+#    password:
+#      existingSecret: moltis-jacob-password
+#    ingressRoute:
+#      host: moltis-jacob.example.com
+#  sam:
+#    displayName: Sam
+#    resources:
+#      limits:
+#        memory: 2Gi
+#  old-instance:
+#    enabled: false   # stop it, keep its volume
