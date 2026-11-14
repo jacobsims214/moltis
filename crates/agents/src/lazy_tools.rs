@@ -167,18 +167,23 @@ impl AgentTool for ToolSearchTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value> {
-        // Models that fill every declared parameter send the unused one as an
-        // empty string (e.g. `{"query": "amp", "name": ""}`), so blank values
-        // count as absent rather than as a lookup of the tool named "".
+        // Models that fill every declared parameter send the unused one as a
+        // placeholder (`""`, or `"None"`/`"null"` from Python-style chat
+        // templates), e.g. `{"query": "amp", "name": "None"}`. Those count as
+        // absent rather than as a lookup of a tool with that name.
         let field = |key: &str| {
             params
                 .get(key)
                 .and_then(|v| v.as_str())
                 .map(str::trim)
-                .filter(|v| !v.is_empty())
+                .filter(|v| !v.is_empty() && !matches!(*v, "None" | "none" | "null" | "undefined"))
         };
         let name = field("name");
         let query = field("query");
+
+        // A name that matches nothing falls back to searching when a query was
+        // given too, instead of returning an error the model may repeat.
+        let name = name.filter(|n| query.is_none() || self.full_registry.get(n).is_some());
 
         match (name, query) {
             (Some(name), _) => {
@@ -427,6 +432,22 @@ mod tests {
             .unwrap();
         assert!(result.get("results").is_some(), "expected search results, got {result}");
         assert!(result.get("error").is_none());
+    }
+
+    #[tokio::test]
+    async fn placeholder_or_unknown_name_with_query_searches() {
+        let lazy = wrap_registry_lazy(build_full_registry());
+        let search_tool = lazy.get("tool_search").unwrap();
+        for name in ["None", "null", "no_such_tool"] {
+            let result = search_tool
+                .execute(serde_json::json!({ "query": "memory", "name": name }))
+                .await
+                .unwrap();
+            assert!(result.get("results").is_some(), "{name}: expected search results, got {result}");
+        }
+        // Without a query, an unknown name still gets the recovery response.
+        let result = search_tool.execute(serde_json::json!({ "name": "no_such_tool" })).await.unwrap();
+        assert_eq!(result["error"], "unknown tool: no_such_tool");
     }
 
     #[tokio::test]
