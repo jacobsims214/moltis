@@ -51,4 +51,32 @@ kubectl -n moltis port-forward svc/moltis-jacob 13131:13131   # http://localhost
 | Storage | One PVC per instance with `config/`, `data/` and `npm/` subPaths. Moltis uses SQLite, so the Deployment uses `Recreate` and never runs two pods on a volume. PVCs are kept on uninstall (`persistence.retain`). |
 | Removing someone | `enabled: false` scales the instance to zero and keeps its data. |
 
+## Web search and browsing (`webTools`)
+
+```yaml
+defaults:
+  webTools:
+    searxng: { enabled: true }      # meta search + MCP (mcp__searxng__*)
+    playwright: { enabled: true }   # headless Chromium MCP (mcp__playwright__*)
+```
+
+Both run as **native sidecars** in each instance's pod, bound to the pod's
+loopback (`127.0.0.1:8080` SearXNG, `:3010` its MCP, `:8931` Playwright), so
+nothing new is exposed. Kubernetes starts them before Moltis and waits for
+their startup probes, so the MCP connections never race the servers.
+
+- SearXNG uses `files/searxng-settings.yml`: JSON API on, limiter off, a broad
+  engine mix (Google, Bing, DuckDuckGo, Brave, Startpage, Mojeek, Qwant,
+  Wikipedia, GitHub, Stack Overflow, Reddit) plus image and news engines.
+  Engines fail independently, so the mix is what keeps results flowing.
+  Override with `webTools.searxng.settings`.
+- Enabling either adds its MCP server to the instance (merged into an existing
+  list, never removing UI-added servers), denies Moltis's built-in
+  `web_search` / `browser` tools, and appends search → read → browse guidance
+  to `TOOLS.md` once.
+- Image results are given as links: Moltis's CSP doesn't load external images
+  inline (which also blocks image-URL data exfiltration).
+- Resources: SearXNG ~200 MiB, its MCP ~64 MiB, Playwright 0.4–2 GiB while
+  browsing; per instance.
+
 See `values.yaml` for every option.
