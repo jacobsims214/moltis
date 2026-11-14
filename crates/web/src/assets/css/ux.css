@@ -28,14 +28,26 @@ html.ux-shell:not([data-theme="dark"]) {
   --assistant-border: transparent;
 }
 html.ux-shell[data-theme="dark"] {
-  --accent: #e07a3e;
-  --accent-hover: #ea8d55;
+  /* Warm dark, same family as the light palette (not moltis's blue-black) */
+  --bg: #1b1a18;
+  --bg-elevated: #262421;
+  --bg-hover: #312e2a;
+  --surface: #211f1d;
+  --surface2: #2a2825;
+  --text: #e6e0d7;
+  --text-strong: #f6f2eb;
+  --muted: #a1998e;
+  --border: #36322d;
+  --border-strong: #47423b;
+  --accent: #e2793b;
+  --accent-hover: #ec8d54;
   --accent-dim: #c76a32;
-  --accent-subtle: rgba(224, 122, 62, 0.14);
-  --user-bg: #262a33;
+  --accent-subtle: rgba(226, 121, 59, 0.14);
+  --user-bg: #302d29;
   --user-border: transparent;
   --assistant-bg: transparent;
   --assistant-border: transparent;
+  --shadow-color: rgba(0, 0, 0, 0.45);
 }
 
 html.ux-shell body {
@@ -481,23 +493,56 @@ html.ux-shell .chat-toolbar {
     border-bottom: 1.8px solid var(--muted);
     transform: rotate(45deg);
   }
-  /* Chat menu as a bottom sheet */
+  /* Chat menu as a bottom sheet that slides up */
   html.ux-shell .chat-menu {
+    display: flex;
     left: 0;
     right: 0;
     bottom: 0;
     top: auto !important;
     max-width: none;
+    max-height: 80dvh;
+    overflow-y: auto;
     border-radius: 20px 20px 0 0;
-    padding: 14px 12px calc(var(--safe-bottom, 0px) + 18px);
-    box-shadow: 0 -8px 24px rgba(31, 29, 26, 0.14);
+    padding: 8px 12px calc(var(--safe-bottom, 0px) + 14px);
+    box-shadow: 0 -8px 28px var(--shadow-color, rgba(31, 29, 26, 0.16));
+    transform: translateY(105%);
+    visibility: hidden;
+    transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0s linear 0.26s;
+  }
+  html.ux-shell .chat-menu.open {
+    transform: translateY(0);
+    visibility: visible;
+    transition: transform 0.26s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  html.ux-shell .chat-menu::before {
+    content: "";
+    align-self: center;
+    width: 36px;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--border-strong);
+    margin: 2px 0 6px;
+    flex-shrink: 0;
+  }
+  html.ux-shell .chat-menu-backdrop {
+    display: block;
+    opacity: 0;
+    pointer-events: none;
+    background: rgba(0, 0, 0, 0.32);
+    transition: opacity 0.2s ease;
   }
   html.ux-shell .chat-menu-backdrop.open {
-    background: rgba(31, 29, 26, 0.28);
+    opacity: 1;
+    pointer-events: auto;
   }
   html.ux-shell .chat-menu button {
-    min-height: 48px;
+    min-height: 46px;
     font-size: 15px !important;
+  }
+  /* Reply actions on phones: copy and retry only */
+  html.ux-shell .msg-action-bar .msg-action-btn:nth-child(n + 3) {
+    display: none;
   }
 }
 
@@ -579,5 +624,184 @@ html.ux-shell .tool-group.open .tool-group-body {
 
 /* Reply medium is only interesting when it was spoken */
 html.ux-shell .msg-model-footer .reply-medium-badge {
+  display: none;
+}
+
+/* ── Chat menu sections ──────────────────────────────────── */
+html.ux-shell .chat-menu-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 6px 10px 2px;
+}
+html.ux-shell .chat-menu-switch {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between !important;
+}
+html.ux-shell .chat-menu-switch .ux-switch {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--border-strong);
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+html.ux-shell .chat-menu-switch .ux-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+html.ux-shell .chat-menu-switch[aria-checked="true"] .ux-switch {
+  background: var(--accent);
+}
+html.ux-shell .chat-menu-switch[aria-checked="true"] .ux-switch::after {
+  transform: translateX(16px);
+}
+html.ux-shell .chat-menu-advanced {
+  border-top: 1px solid var(--border);
+  padding-top: 4px;
+}
+html.ux-shell .chat-menu-advanced > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 42px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--muted);
+}
+html.ux-shell .chat-menu-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+html.ux-shell .chat-menu-advanced > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.8px solid currentColor;
+  border-bottom: 1.8px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+html.ux-shell .chat-menu-advanced[open] > summary::after {
+  transform: rotate(45deg);
+}
+html.ux-shell .chat-menu-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* ── Tool activity hidden (default) ──────────────────────── */
+html.ux-shell.ux-hide-tools .tool-group,
+html.ux-shell.ux-hide-tools .msg.exec-card,
+html.ux-shell.ux-hide-tools .msg-reasoning {
+  display: none !important;
+}
+
+/* "Save .md" label is md:inline only upstream; in the menu always show it */
+html.ux-shell .chat-menu button[title="Save as Markdown"] span.hidden {
+  display: inline !important;
+}
+
+/* ── Drawer chat rows: title, time, one line of preview ──── */
+@media (max-width: 767px) {
+  html.ux-shell #sessionList .session-item {
+    border: 0 !important;
+    border-radius: 12px;
+    padding: 10px 12px;
+    margin: 0 0 2px;
+    box-shadow: none;
+    background: transparent;
+  }
+  html.ux-shell #sessionList .session-item.active {
+    background: var(--bg-hover);
+    border-left: 0 !important;
+  }
+  html.ux-shell #sessionList .session-item::before,
+  html.ux-shell #sessionList .session-item::after {
+    display: none !important;
+  }
+  html.ux-shell #sessionList .session-icon {
+    display: none;
+  }
+  html.ux-shell #sessionList .session-label {
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-strong);
+  }
+  html.ux-shell #sessionList .session-meta {
+    font-size: 13px;
+    color: var(--muted);
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+/* ── Empty chat ──────────────────────────────────────────── */
+html.ux-shell #welcomeCard ul {
+  display: none;
+}
+html.ux-shell #welcomeCard h2 {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+  margin-bottom: 6px;
+}
+html.ux-shell #welcomeCard p {
+  font-size: 15px;
+}
+html.ux-shell .ux-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+html.ux-shell .ux-suggestion {
+  min-height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface2);
+  color: var(--text);
+  font: 500 14px var(--font-body);
+  cursor: pointer;
+}
+html.ux-shell .ux-suggestion:hover {
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+}
+@media (max-width: 767px) {
+  html.ux-shell #welcomeCard [data-welcome-agents] {
+    display: none !important;
+  }
+}
+
+/* Stop: neutral, not an alarm */
+html.ux-shell .chat-composer-send-btn.is-stop {
+  background: var(--text-strong);
+  color: var(--bg);
+}
+html.ux-shell .chat-composer-send-btn.is-stop:hover:not(:disabled),
+html.ux-shell .chat-composer-send-btn.is-stop:focus-visible:not(:disabled) {
+  background: var(--text);
+  color: var(--bg);
+}
+/* "/ for commands" hint: power-user detail, not a first impression */
+html.ux-shell #welcomeCard > div.mt-6 {
   display: none;
 }

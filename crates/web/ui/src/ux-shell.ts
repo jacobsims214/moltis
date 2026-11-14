@@ -133,8 +133,14 @@ function syncTitle(): void {
 	const update = (): void => {
 		queued = false;
 		const name = document.querySelector("#sessionNameMount .chat-session-name");
-		title.textContent = location.pathname.startsWith("/chats") ? (name?.textContent || "").trim() : "";
+		const raw = (name?.textContent || "").trim();
+		// Untitled chats are named by their key until auto-titled.
+		const untitled = /^session:|^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(raw);
+		title.textContent = location.pathname.startsWith("/chats") ? (untitled ? "New chat" : raw) : "";
+		addSuggestions();
 		adoptToolbarControls();
+		const input = document.getElementById("chatInput") as HTMLTextAreaElement | null;
+		if (input && input.placeholder === "Type a message...") input.placeholder = "Message moltis…";
 	};
 	const schedule = (): void => {
 		if (queued) return;
@@ -160,14 +166,52 @@ function syncTitle(): void {
 const ICON_MORE =
 	'<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
 
-const MENU_ITEM_IDS = [
-	"sandboxToggle",
-	"sandboxImageBtn",
-	"mcpToggleBtn",
-	"debugPanelBtn",
-	"fullContextBtn",
-	"sessionActionsMount",
-] as const;
+/** Power-user toolbar controls, tucked under "Advanced" in the chat menu. */
+const ADVANCED_IDS = ["sandboxToggle", "sandboxImageBtn", "mcpToggleBtn", "debugPanelBtn", "fullContextBtn"] as const;
+
+// ── Tool activity visibility ─────────────────────────────────
+// Off by default: tool steps and reasoning disclosures are hidden so a reply
+// reads like a reply. Approval prompts always show.
+const SHOW_TOOLS_KEY = "moltis-show-tool-activity";
+
+function showToolActivity(): boolean {
+	try {
+		return localStorage.getItem(SHOW_TOOLS_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+
+function applyToolActivity(show: boolean): void {
+	document.documentElement.classList.toggle("ux-hide-tools", !show);
+	try {
+		localStorage.setItem(SHOW_TOOLS_KEY, show ? "1" : "0");
+	} catch {
+		// private mode: the choice just isn't remembered
+	}
+	for (const sw of document.querySelectorAll(".chat-menu-switch[data-setting='tools']")) {
+		sw.setAttribute("aria-checked", String(show));
+	}
+}
+
+function toolActivitySwitch(): HTMLElement {
+	const sw = el(
+		"button",
+		{
+			class: "chat-menu-switch",
+			type: "button",
+			role: "switch",
+			"data-setting": "tools",
+			"aria-checked": String(showToolActivity()),
+		},
+		'<span>Show tool activity</span><span class="ux-switch" aria-hidden="true"></span>',
+	);
+	sw.addEventListener("click", (e) => {
+		e.stopPropagation(); // keep the menu open while toggling
+		applyToolActivity(!showToolActivity());
+	});
+	return sw;
+}
 
 let chatMenu: HTMLElement | null = null;
 let chatMenuBackdrop: HTMLElement | null = null;
@@ -198,11 +242,18 @@ function toggleChatMenu(anchor?: HTMLElement): void {
 function buildChatMenu(): void {
 	if (chatMenu) return;
 	chatMenuBackdrop = el("div", { class: "chat-menu-backdrop" });
-	chatMenuBackdrop.addEventListener("click", closeChatMenu);
+	// pointerdown, not click: closes on the first touch, without a 300ms wait
+	// or the tap falling through to whatever is underneath.
+	chatMenuBackdrop.addEventListener("pointerdown", (e) => {
+		e.preventDefault();
+		closeChatMenu();
+	});
 	chatMenu = el("div", { class: "chat-menu", role: "menu", "aria-label": "Chat options" });
 	// Any action inside the menu closes it (rename/delete dialogs open on top).
 	chatMenu.addEventListener("click", (e) => {
-		if ((e.target as HTMLElement).closest("button, a")) setTimeout(closeChatMenu, 0);
+		const target = e.target as HTMLElement;
+		if (target.closest("summary, .chat-menu-switch")) return;
+		if (target.closest("button, a")) setTimeout(closeChatMenu, 0);
 	});
 	document.body.append(chatMenuBackdrop, chatMenu);
 	document.addEventListener("keydown", (e) => {
@@ -217,10 +268,17 @@ function adoptToolbarControls(): void {
 	if (!(toolbar && chatMenu) || toolbar.dataset.uxAdopted === "1") return;
 	toolbar.dataset.uxAdopted = "1";
 	chatMenu.replaceChildren();
-	for (const id of MENU_ITEM_IDS) {
+	chatMenu.appendChild(toolActivitySwitch());
+	const actions = document.getElementById("sessionActionsMount");
+	if (actions) chatMenu.appendChild(actions);
+	const advanced = el("details", { class: "chat-menu-advanced" }, "<summary>Advanced</summary>");
+	const advancedBody = el("div", { class: "chat-menu-advanced-body" });
+	for (const id of ADVANCED_IDS) {
 		const node = document.getElementById(id);
-		if (node && !chatMenu.contains(node)) chatMenu.appendChild(node);
+		if (node) advancedBody.appendChild(node);
 	}
+	advanced.appendChild(advancedBody);
+	chatMenu.appendChild(advanced);
 	const more = el(
 		"button",
 		{ class: "chat-menu-btn", type: "button", "aria-label": "Chat options", title: "Chat options" },
@@ -231,6 +289,35 @@ function adoptToolbarControls(): void {
 		toggleChatMenu(more);
 	});
 	toolbar.appendChild(more);
+}
+
+// ── New-chat suggestions ─────────────────────────────────────
+const SUGGESTIONS = [
+	"Plan my week",
+	"Summarize a web page for me",
+	"Help me write a message",
+	"Explain something simply",
+];
+
+/** Tap-to-fill starters on the empty chat (fills the composer, never sends). */
+function addSuggestions(): void {
+	const card = document.getElementById("welcomeCard");
+	if (!card || card.querySelector(".ux-suggestions")) return;
+	const row = el("div", { class: "ux-suggestions" });
+	for (const text of SUGGESTIONS) {
+		const chip = el("button", { class: "ux-suggestion", type: "button" });
+		chip.textContent = text;
+		chip.addEventListener("click", () => {
+			const input = document.getElementById("chatInput") as HTMLTextAreaElement | null;
+			if (!input) return;
+			input.value = `${text} `;
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+			input.focus();
+			input.setSelectionRange(input.value.length, input.value.length);
+		});
+		row.appendChild(chip);
+	}
+	card.appendChild(row);
 }
 
 /** Let the on-screen keyboard resize the layout instead of covering the composer. */
@@ -245,6 +332,7 @@ export function initUxShell(): void {
 	addStylesheet();
 	keyboardResizesContent();
 	document.documentElement.classList.add("ux-shell");
+	applyToolActivity(showToolActivity());
 	buildHeader();
 	buildDrawer();
 	rewireMenuButton();
