@@ -167,8 +167,18 @@ impl AgentTool for ToolSearchTool {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value> {
-        let name = params.get("name").and_then(|v| v.as_str());
-        let query = params.get("query").and_then(|v| v.as_str());
+        // Models that fill every declared parameter send the unused one as an
+        // empty string (e.g. `{"query": "amp", "name": ""}`), so blank values
+        // count as absent rather than as a lookup of the tool named "".
+        let field = |key: &str| {
+            params
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|v| !v.is_empty())
+        };
+        let name = field("name");
+        let query = field("query");
 
         match (name, query) {
             (Some(name), _) => {
@@ -405,6 +415,18 @@ mod tests {
                 .unwrap()
                 .contains("Skills are not tools")
         );
+    }
+
+    #[tokio::test]
+    async fn blank_name_with_query_searches_instead_of_activating() {
+        let lazy = wrap_registry_lazy(build_full_registry());
+        let search_tool = lazy.get("tool_search").unwrap();
+        let result = search_tool
+            .execute(serde_json::json!({ "query": "memory", "name": "" }))
+            .await
+            .unwrap();
+        assert!(result.get("results").is_some(), "expected search results, got {result}");
+        assert!(result.get("error").is_none());
     }
 
     #[tokio::test]
