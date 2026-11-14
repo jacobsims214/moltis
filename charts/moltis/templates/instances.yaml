@@ -15,9 +15,18 @@ metadata:
 data:
   moltis.toml: |
     {{- include "moltis.configToml" $ctx | nindent 4 }}
-  {{- if $c.mcpServers }}
+  {{- $mcp := include "moltis.effectiveMcpServers" $ctx | fromYaml }}
+  {{- if $mcp }}
   mcp-servers.json: |
     {{- include "moltis.mcpServersJson" $ctx | nindent 4 }}
+  {{- end }}
+  {{- if or $c.webTools.searxng.enabled $c.webTools.playwright.enabled }}
+  web-tools.md: |
+    {{- $root.Files.Get "files/web-tools.md" | nindent 4 }}
+  {{- end }}
+  {{- if $c.webTools.searxng.enabled }}
+  searxng-settings.yml: |
+    {{- include "moltis.searxngSettings" $ctx | nindent 4 }}
   {{- end }}
 {{- if and $c.password.value (not $c.password.existingSecret) }}
 ---
@@ -76,7 +85,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/config: {{ printf "%s%s" (include "moltis.configToml" $ctx) (include "moltis.mcpServersJson" $ctx) | sha256sum }}
+        checksum/config: {{ printf "%s%s%s" (include "moltis.configToml" $ctx) (include "moltis.mcpServersJson" $ctx) (include "moltis.searxngSettings" $ctx) | sha256sum }}
         {{- with $c.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -118,10 +127,26 @@ spec:
               # The SPA router only checks this marker (not SKIP_ONBOARDING).
               touch /home/moltis/.moltis/.onboarded
               {{- end }}
-              {{- if $c.mcpServers }}
-              if [ ! -f /home/moltis/.moltis/mcp-servers.json ]; then
-                cp /seed/mcp-servers.json /home/moltis/.moltis/mcp-servers.json
-                echo "mcp-servers.json seeded from chart"
+              {{- if $mcp }}
+              # Merge chart MCP servers into the instance's list: add missing
+              # ones, never remove or overwrite servers added in the UI.
+              node -e '
+                const fs = require("fs");
+                const dst = "/home/moltis/.moltis/mcp-servers.json";
+                const want = JSON.parse(fs.readFileSync("/seed/mcp-servers.json", "utf8")).servers;
+                let cur = { servers: {} };
+                try { cur = JSON.parse(fs.readFileSync(dst, "utf8")); cur.servers = cur.servers || {}; } catch {}
+                const added = Object.keys(want).filter((k) => !(k in cur.servers));
+                for (const k of added) cur.servers[k] = want[k];
+                fs.writeFileSync(dst, JSON.stringify(cur, null, 2));
+                console.log("mcp-servers.json: added", added.length ? added.join(", ") : "nothing");
+              '
+              {{- end }}
+              {{- if or $c.webTools.searxng.enabled $c.webTools.playwright.enabled }}
+              # Web search/browsing notes for the agent, appended once.
+              T=/home/moltis/.moltis/TOOLS.md
+              if ! grep -q "## Web search and browsing" "$T" 2>/dev/null; then
+                printf '\n' >> "$T"; cat /seed/web-tools.md >> "$T"; echo "TOOLS.md: web tools notes added"
               fi
               {{- end }}
           securityContext:
@@ -132,6 +157,91 @@ spec:
             - name: seed
               mountPath: /seed
             {{- include "moltis.volumeMounts" $ctx | nindent 12 }}
+        # Web tools run as native sidecars (restartPolicy: Always): Kubernetes
+        # starts them, waits for their startup probes, then starts Moltis, so
+        # its MCP connections never race the servers.
+        {{- if $c.webTools.searxng.enabled }}
+        - name: searxng
+          image: {{ $c.webTools.searxng.image }}
+          restartPolicy: Always
+          env:
+            - name: GRANIAN_HOST
+              value: "127.0.0.1"
+            - name: GRANIAN_PORT
+              value: "8080"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          # Bound to the pod's loopback, so probe from inside the container
+          # (an httpGet host of 127.0.0.1 would be the node's loopback).
+          startupProbe:
+            exec:
+              command: ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=3)"]
+            periodSeconds: 15
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml $c.webTools.searxng.resources | nindent 12 }}
+          volumeMounts:
+            - name: seed
+              mountPath: /etc/searxng/settings.yml
+              subPath: searxng-settings.yml
+              readOnly: true
+            - name: searxng-cache
+              mountPath: /var/cache/searxng
+        - name: searxng-mcp
+          image: {{ $c.webTools.searxng.mcpImage }}
+          restartPolicy: Always
+          startupProbe:
+            exec:
+              command: ["node", "-e", "fetch('http://127.0.0.1:3010/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+            periodSeconds: 2
+            failureThreshold: 60
+          env:
+            - name: SEARXNG_URL
+              value: http://127.0.0.1:8080
+            - name: MCP_HTTP_PORT
+              value: "3010"
+            - name: MCP_HTTP_HOST
+              value: "127.0.0.1"
+            - name: MCP_HTTP_STATELESS
+              value: "true"
+            - name: SEARXNG_TIMEOUT_MS
+              value: "15000"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $c.webTools.searxng.mcpResources | nindent 12 }}
+        {{- end }}
+        {{- if $c.webTools.playwright.enabled }}
+        - name: playwright
+          image: {{ $c.webTools.playwright.image }}
+          restartPolicy: Always
+          startupProbe:
+            exec:
+              command: ["node", "-e", "require('net').connect(8931, '127.0.0.1').on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+            periodSeconds: 2
+            failureThreshold: 60
+          # Appended to the image's entrypoint (node cli.js --headless
+          # --browser chromium --no-sandbox).
+          args: ["--port", "8931", "--host", "127.0.0.1", "--allowed-hosts", "*", "--isolated"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml $c.webTools.playwright.resources | nindent 12 }}
+          volumeMounts:
+            - name: dshm
+              mountPath: /dev/shm
+        {{- end }}
       containers:
         - name: moltis
           image: {{ include "moltis.image" $root }}
@@ -207,6 +317,16 @@ spec:
             - name: tmp
               mountPath: /tmp
       volumes:
+        {{- if $c.webTools.searxng.enabled }}
+        - name: searxng-cache
+          emptyDir: {}
+        {{- end }}
+        {{- if $c.webTools.playwright.enabled }}
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ $c.webTools.playwright.shmSize }}
+        {{- end }}
         - name: seed
           configMap:
             name: {{ $i.fullname }}-config

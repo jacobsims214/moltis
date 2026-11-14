@@ -79,6 +79,32 @@ defaults:
       - "nodes_*"
       - "codebase_*"
 
+  # Web search + browsing as pod sidecars (localhost only), registered as
+  # MCP servers and replacing Moltis's built-in web_search/browser tools:
+  #   searxng      — our own meta search (web, images, news), JSON API
+  #   searxng-mcp  — MCP over it (mcp__searxng__*)
+  #   playwright   — headless Chromium MCP for real browsing (mcp__playwright__*)
+  webTools:
+    searxng:
+      enabled: false
+      image: searxng/searxng:2026.11.14-a7128d5d1
+      mcpImage: isokoliuk/mcp-searxng:latest
+      # Full settings.yml override; empty = the tuned files/searxng-settings.yml
+      settings: ""
+      resources:
+        requests: { cpu: 50m, memory: 192Mi }
+        limits: { memory: 512Mi }
+      mcpResources:
+        requests: { cpu: 20m, memory: 64Mi }
+        limits: { memory: 256Mi }
+    playwright:
+      enabled: false
+      image: mcr.microsoft.com/playwright/mcp:latest
+      shmSize: 1Gi
+      resources:
+        requests: { cpu: 100m, memory: 384Mi }
+        limits: { memory: 2Gi }
+
   # MCP servers seeded into a fresh instance (like moltis.toml, only when the
   # instance has none yet). OAuth servers (e.g. AMP) still need each person
   # to sign in from Settings → MCP once.

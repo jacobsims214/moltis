@@ -43,6 +43,9 @@ pub struct SseTransport {
     auth: Option<SharedAuthProvider>,
     /// Session identifier used by streamable HTTP servers.
     session_id: RwLock<Option<String>>,
+    /// Params of the last `initialize` request, replayed to open a new
+    /// session when the server reports the current one as gone (HTTP 404).
+    init_params: RwLock<Option<serde_json::Value>>,
 }
 
 impl SseTransport {
@@ -81,6 +84,7 @@ impl SseTransport {
             next_id: AtomicU64::new(1),
             auth: None,
             session_id: RwLock::new(None),
+            init_params: RwLock::new(None),
         }))
     }
 
@@ -124,6 +128,7 @@ impl SseTransport {
             next_id: AtomicU64::new(1),
             auth: Some(auth),
             session_id: RwLock::new(None),
+            init_params: RwLock::new(None),
         }))
     }
 
@@ -395,12 +400,44 @@ impl McpTransport for SseTransport {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<JsonRpcResponse> {
+        if method == "initialize" {
+            *self.init_params.write().await = params.clone();
+        }
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let req = JsonRpcRequest::new(id, method, params);
 
         debug!(method = %method, id = %id, url = %self.display_url, "SSE client -> server");
 
-        let http_resp = self.send_with_auth_retry(method, &req).await?;
+        let mut http_resp = self.send_with_auth_retry(method, &req).await?;
+
+        // Streamable HTTP: a 404 for a request carrying a session id means the
+        // server dropped that session; the client must start a new one
+        // (initialize + initialized) and may retry. Do that once here so tool
+        // calls survive server-side session expiry instead of failing until
+        // the server is restarted.
+        if http_resp.status() == reqwest::StatusCode::NOT_FOUND
+            && method != "initialize"
+            && self.session_id.read().await.is_some()
+            && let Some(init) = self.init_params.read().await.clone()
+        {
+            warn!(
+                method = %method,
+                url = %self.display_url,
+                "MCP session not found (HTTP 404); re-initializing and retrying once"
+            );
+            *self.session_id.write().await = None;
+            let init_id = self.next_id.fetch_add(1, Ordering::SeqCst);
+            let init_req = JsonRpcRequest::new(init_id, "initialize", Some(init));
+            let init_resp = self.send_with_auth_retry("initialize", &init_req).await?;
+            if init_resp.status().is_success() {
+                // Drain the (possibly event-stream) initialize result.
+                let _ = init_resp.text().await;
+                if let Err(e) = self.notify("notifications/initialized", None).await {
+                    warn!(error = %e, "failed to send initialized after session re-init");
+                }
+                http_resp = self.send_with_auth_retry(method, &req).await?;
+            }
+        }
 
         if !http_resp.status().is_success() {
             let status = http_resp.status();
@@ -802,6 +839,75 @@ mod tests {
 
         first.assert_async().await;
         second.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_sse_transport_reinitializes_after_session_404() {
+        use mockito::Matcher;
+
+        let mut server = mockito::Server::new_async().await;
+        let ok = r#"{"jsonrpc":"2.0","id":1,"result":{"ok":true}}"#;
+
+        let init_a = server
+            .mock("POST", "/")
+            .match_body(Matcher::PartialJsonString(r#"{"id":1,"method":"initialize"}"#.into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("mcp-session-id", "session-a")
+            .with_body(ok)
+            .create_async()
+            .await;
+        let expired = server
+            .mock("POST", "/")
+            .match_header("mcp-session-id", "session-a")
+            .match_body(Matcher::PartialJsonString(r#"{"method":"tools/call"}"#.into()))
+            .with_status(404)
+            .with_body("Session not found")
+            .create_async()
+            .await;
+        let init_b = server
+            .mock("POST", "/")
+            .match_body(Matcher::PartialJsonString(r#"{"id":3,"method":"initialize"}"#.into()))
+            .match_header("mcp-session-id", Matcher::Missing)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_header("mcp-session-id", "session-b")
+            .with_body(ok)
+            .create_async()
+            .await;
+        let initialized = server
+            .mock("POST", "/")
+            .match_header("mcp-session-id", "session-b")
+            .match_body(Matcher::PartialJsonString(r#"{"method":"notifications/initialized"}"#.into()))
+            .with_status(202)
+            .create_async()
+            .await;
+        let retried = server
+            .mock("POST", "/")
+            .match_header("mcp-session-id", "session-b")
+            .match_body(Matcher::PartialJsonString(r#"{"id":2,"method":"tools/call"}"#.into()))
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"jsonrpc":"2.0","id":2,"result":{"content":[]}}"#)
+            .create_async()
+            .await;
+
+        let transport = SseTransport::new(&server.url()).unwrap();
+        transport
+            .request("initialize", Some(serde_json::json!({"protocolVersion": "2025-06-18"})))
+            .await
+            .unwrap();
+        let resp = transport
+            .request("tools/call", Some(serde_json::json!({"name": "browser_snapshot"})))
+            .await
+            .unwrap();
+        assert!(resp.result.is_some(), "retried call should succeed: {resp:?}");
+
+        init_a.assert_async().await;
+        expired.assert_async().await;
+        init_b.assert_async().await;
+        initialized.assert_async().await;
+        retried.assert_async().await;
     }
 
     #[tokio::test]

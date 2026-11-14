@@ -4,7 +4,7 @@ name: Homelab image
 
 on:
   push:
-    branches: [feat/helm-chart]
+    branches: [feat/helm-chart, feat/mobile-ux]
     paths-ignore:
       - "charts/**"
       - "docs/**"

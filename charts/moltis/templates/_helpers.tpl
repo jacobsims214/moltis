@@ -68,7 +68,10 @@ enabled = false
 
 [tools]
 registry_mode = {{ $c.tools.registryMode | quote }}
-{{- with $c.tools.deny }}
+{{- $deny := $c.tools.deny | default list }}
+{{- if $c.webTools.searxng.enabled }}{{ $deny = append $deny "web_search" }}{{ end }}
+{{- if $c.webTools.playwright.enabled }}{{ $deny = append $deny "browser" }}{{ end }}
+{{- with $deny }}
 
 [tools.policy]
 deny = {{ toJson . }}
@@ -152,8 +155,32 @@ Seed mcp-servers.json for one instance.
 */}}
 {{- define "moltis.mcpServersJson" -}}
 {{- $servers := dict }}
-{{- range $name, $srv := .i.cfg.mcpServers }}
+{{- range $name, $srv := (include "moltis.effectiveMcpServers" . | fromYaml) }}
 {{- $_ := set $servers $name (dict "command" (default "" $srv.command) "args" (default list $srv.args) "enabled" (ne (toString $srv.enabled) "false") "transport" (default "streamable-http" $srv.transport) "url" (default "" $srv.url)) }}
 {{- end }}
 {{- dict "servers" $servers | toPrettyJson }}
+{{- end }}
+
+{{/*
+User MCP servers plus the web-tool sidecars that are enabled.
+*/}}
+{{- define "moltis.effectiveMcpServers" -}}
+{{- $servers := deepCopy (default dict .i.cfg.mcpServers) }}
+{{- if .i.cfg.webTools.searxng.enabled }}
+{{- $_ := set $servers "searxng" (dict "transport" "streamable-http" "url" "http://127.0.0.1:3010/mcp") }}
+{{- end }}
+{{- if .i.cfg.webTools.playwright.enabled }}
+{{- $_ := set $servers "playwright" (dict "transport" "streamable-http" "url" "http://127.0.0.1:8931/mcp") }}
+{{- end }}
+{{- toYaml $servers }}
+{{- end }}
+
+{{- define "moltis.searxngSettings" -}}
+{{- $c := .i.cfg -}}
+{{- $secret := printf "%s/%s/searxng" .root.Release.Name .i.name | sha256sum | trunc 40 -}}
+{{- if $c.webTools.searxng.settings -}}
+{{ $c.webTools.searxng.settings }}
+{{- else -}}
+{{ .root.Files.Get "files/searxng-settings.yml" | replace "{{SECRET}}" $secret }}
+{{- end -}}
 {{- end }}

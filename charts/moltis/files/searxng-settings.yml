@@ -1,0 +1,50 @@
+# Tuned for agent use: JSON API on, no rate limiter (single local client),
+# a broad but reliable engine set for web, images and news.
+use_default_settings:
+  engines:
+    keep_only:
+      - google
+      - bing
+      - duckduckgo
+      - brave
+      - startpage
+      - mojeek
+      - qwant
+      - wikipedia
+      - wikidata
+      - github
+      - stackoverflow
+      - reddit
+      - google images
+      - bing images
+      - duckduckgo images
+      - brave.images
+      - qwant images
+      - openverse
+      - google news
+      - bing news
+      - duckduckgo news
+      - brave.news
+general:
+  instance_name: "moltis-search"
+  contact_url: "https://github.com/jacobsims214/moltis"
+  enable_metrics: false
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+server:
+  secret_key: "{{SECRET}}"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 10.0
+  pool_connections: 100
+  pool_maxsize: 20
+  enable_http2: true
