@@ -11,6 +11,9 @@ defaults:
     tlsSecretName: wildcard-tls
   networkPolicy:
     enabled: true
+  mcpServers:
+    amp:
+      url: https://amp.example.com/mcp/
 instances:
   jacob:
     displayName: Jacob

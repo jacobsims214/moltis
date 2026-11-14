@@ -66,6 +66,14 @@ terminal_enabled = {{ $c.terminal }}
 [tls]
 enabled = false
 
+[tools]
+registry_mode = {{ $c.tools.registryMode | quote }}
+{{- with $c.tools.deny }}
+
+[tools.policy]
+deny = {{ toJson . }}
+{{- end }}
+
 [tools.exec.sandbox]
 backend = {{ $c.sandboxBackend | quote }}
 {{- if or $c.displayName $c.timezone }}
@@ -137,4 +145,15 @@ priority_models = {{ toJson . }}
 - name: state
   mountPath: /home/moltis/.npm
   subPath: npm
+{{- end }}
+
+{{/*
+Seed mcp-servers.json for one instance.
+*/}}
+{{- define "moltis.mcpServersJson" -}}
+{{- $servers := dict }}
+{{- range $name, $srv := .i.cfg.mcpServers }}
+{{- $_ := set $servers $name (dict "command" (default "" $srv.command) "args" (default list $srv.args) "enabled" (ne (toString $srv.enabled) "false") "transport" (default "streamable-http" $srv.transport) "url" (default "" $srv.url)) }}
+{{- end }}
+{{- dict "servers" $servers | toPrettyJson }}
 {{- end }}

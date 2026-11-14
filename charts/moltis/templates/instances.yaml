@@ -15,6 +15,10 @@ metadata:
 data:
   moltis.toml: |
     {{- include "moltis.configToml" $ctx | nindent 4 }}
+  {{- if $c.mcpServers }}
+  mcp-servers.json: |
+    {{- include "moltis.mcpServersJson" $ctx | nindent 4 }}
+  {{- end }}
 {{- if and $c.password.value (not $c.password.existingSecret) }}
 ---
 apiVersion: v1
@@ -72,7 +76,7 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       annotations:
-        checksum/config: {{ include "moltis.configToml" $ctx | sha256sum }}
+        checksum/config: {{ printf "%s%s" (include "moltis.configToml" $ctx) (include "moltis.mcpServersJson" $ctx) | sha256sum }}
         {{- with $c.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -108,6 +112,12 @@ spec:
                 echo "moltis.toml seeded from chart"
               else
                 echo "moltis.toml exists, leaving it (configOverwrite=false)"
+              fi
+              {{- end }}
+              {{- if $c.mcpServers }}
+              if [ ! -f /home/moltis/.moltis/mcp-servers.json ]; then
+                cp /seed/mcp-servers.json /home/moltis/.moltis/mcp-servers.json
+                echo "mcp-servers.json seeded from chart"
               fi
               {{- end }}
           securityContext:

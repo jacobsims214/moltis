@@ -60,6 +60,29 @@ defaults:
   # cleared, rlimits, unprivileged) — the pod is the isolation boundary.
   sandboxBackend: restricted-host
 
+  # Tool surface. A local model re-reads every tool schema at the start of
+  # each chat: with an MCP server like AMP (76 tools) that was ~51k prompt
+  # tokens (~70 s at ~750 tok/s prefill). Lazy mode sends one `tool_search`
+  # tool instead and activates tools on demand (~8.5k tokens, ~13 s).
+  tools:
+    registryMode: lazy        # lazy | full
+    # Tools no family instance can use here (glob patterns).
+    deny:
+      - "teams_*"
+      - voice_call
+      - gmail_connector
+      - himalaya_connector
+      - "nodes_*"
+      - "codebase_*"
+
+  # MCP servers seeded into a fresh instance (like moltis.toml, only when the
+  # instance has none yet). OAuth servers (e.g. AMP) still need each person
+  # to sign in from Settings → MCP once.
+  mcpServers: {}
+  #  amp:
+  #    transport: streamable-http
+  #    url: https://amp.example.com/mcp/
+
   # Moltis rewrites moltis.toml when settings change in the UI, so the
   # rendered config only seeds a fresh volume. Set to true to overwrite the
   # file on every start (UI changes to it are then lost on restart).
