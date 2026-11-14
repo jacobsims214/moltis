@@ -500,3 +500,84 @@ html.ux-shell .chat-toolbar {
     font-size: 15px !important;
   }
 }
+
+/* ── Tool-call groups ────────────────────────────────────── */
+html.ux-shell .tool-group {
+  align-self: flex-start;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+html.ux-shell .tool-group-head {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  max-width: 100%;
+  padding: 0 12px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface2);
+  color: var(--muted);
+  font: 500 13px var(--font-body);
+  cursor: pointer;
+}
+html.ux-shell .tool-group-head:hover {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
+}
+html.ux-shell .tool-group-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+  flex-shrink: 0;
+}
+html.ux-shell .tool-group.running .tool-group-dot {
+  background: var(--accent);
+  animation: tool-group-pulse 1.2s ease-in-out infinite;
+}
+html.ux-shell .tool-group.has-error:not(.running) .tool-group-dot {
+  background: var(--warn);
+}
+html.ux-shell .tool-group-label {
+  color: var(--text);
+  white-space: nowrap;
+}
+html.ux-shell .tool-group-names {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+html.ux-shell .tool-group-chevron {
+  display: inline-flex;
+  transition: transform 0.15s ease;
+}
+html.ux-shell .tool-group.open .tool-group-chevron {
+  transform: rotate(90deg);
+}
+html.ux-shell .tool-group-body {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  margin-left: 14px;
+}
+html.ux-shell .tool-group.open .tool-group-body {
+  display: flex;
+}
+@keyframes tool-group-pulse {
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html.ux-shell .tool-group.running .tool-group-dot { animation: none; }
+}
+
+/* Reply medium is only interesting when it was spoken */
+html.ux-shell .msg-model-footer .reply-medium-badge {
+  display: none;
+}
