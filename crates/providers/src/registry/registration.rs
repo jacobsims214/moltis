@@ -154,7 +154,11 @@ impl ProviderRegistry {
                             .get("openai")
                             .map(|e| extract_cw_overrides(&e.model_overrides))
                             .unwrap_or_default(),
-                    ),
+                    )
+                    .with_max_output_tokens(resolve_max_output_tokens(
+                        config.get("openai"),
+                        &model.id,
+                    )),
                 );
                 self.register(
                     ModelInfo {
@@ -323,6 +327,10 @@ impl ProviderRegistry {
                 {
                     oai = oai.with_probe_timeout_secs(Some(timeout));
                 }
+                oai = oai.with_max_output_tokens(resolve_max_output_tokens(
+                    config.get(def.config_name),
+                    &model.id,
+                ));
 
                 self.register(
                     ModelInfo {
@@ -394,6 +402,7 @@ impl ProviderRegistry {
                     oai = oai.with_strict_tools(strict);
                 }
                 oai = oai.with_probe_timeout_secs(entry.probe_timeout_secs);
+                oai = oai.with_max_output_tokens(resolve_max_output_tokens(Some(entry), &model.id));
                 self.register(
                     ModelInfo {
                         id: model.id.clone(),
@@ -887,7 +896,11 @@ impl ProviderRegistry {
                             .get("openai")
                             .map(|e| extract_cw_overrides(&e.model_overrides))
                             .unwrap_or_default(),
-                    ),
+                    )
+                    .with_max_output_tokens(resolve_max_output_tokens(
+                        config.get("openai"),
+                        &model_id,
+                    )),
                 );
                 self.register(
                     ModelInfo {
@@ -1063,6 +1076,10 @@ impl ProviderRegistry {
                 {
                     oai = oai.with_probe_timeout_secs(Some(timeout));
                 }
+                oai = oai.with_max_output_tokens(resolve_max_output_tokens(
+                    config.get(def.config_name),
+                    &model_id,
+                ));
 
                 let provider = Arc::new(oai);
                 self.register(
@@ -1167,6 +1184,7 @@ impl ProviderRegistry {
                     oai = oai.with_strict_tools(strict);
                 }
                 oai = oai.with_probe_timeout_secs(entry.probe_timeout_secs);
+                oai = oai.with_max_output_tokens(resolve_max_output_tokens(Some(entry), &model_id));
                 let provider = Arc::new(oai);
                 self.register(
                     ModelInfo {

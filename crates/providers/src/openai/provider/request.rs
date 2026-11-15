@@ -34,6 +34,7 @@ impl OpenAiProvider {
         }
         super::core::apply_openai_responses_tool_choice(&mut body, options)?;
         self.apply_reasoning_effort_responses(&mut body);
+        self.apply_output_cap_responses(&mut body);
         Ok(body)
     }
 
@@ -1418,5 +1419,95 @@ mod tests {
             assistant_msg.get("reasoning_content").is_none(),
             "native Fireworks model must NOT have reasoning_content, got: {assistant_msg}"
         );
+    }
+
+    // ── max_output_tokens (per-response output cap) ─────────────────
+
+    fn chat_body() -> serde_json::Value {
+        serde_json::json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+    }
+
+    fn caps(reasoning: bool) -> crate::ModelCapabilities {
+        crate::ModelCapabilities {
+            reasoning,
+            ..crate::ModelCapabilities::default()
+        }
+    }
+
+    #[test]
+    fn output_cap_unset_sends_no_token_limit() {
+        let p = provider("qwen3", "custom-muse", "http://vllm:8000/v1");
+        let mut body = chat_body();
+        p.apply_output_cap_chat(&mut body);
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("max_completion_tokens").is_none());
+
+        let p = p.with_max_output_tokens(Some(0));
+        let mut body = chat_body();
+        p.apply_output_cap_chat(&mut body);
+        assert!(body.get("max_tokens").is_none(), "0 must mean no cap");
+    }
+
+    #[test]
+    fn output_cap_sets_max_tokens_for_non_reasoning_model() {
+        let p = provider("qwen3", "custom-muse", "http://vllm:8000/v1")
+            .with_model_capabilities(caps(false))
+            .with_max_output_tokens(Some(4096));
+        let mut body = chat_body();
+        p.apply_output_cap_chat(&mut body);
+        assert_eq!(body["max_tokens"], 4096);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn output_cap_follows_probe_policy_for_reasoning_models() {
+        // Default policy: reasoning models get max_completion_tokens.
+        let p = provider("o3", "openai", "https://api.openai.com/v1")
+            .with_model_capabilities(caps(true))
+            .with_max_output_tokens(Some(4096));
+        let mut body = chat_body();
+        p.apply_output_cap_chat(&mut body);
+        assert_eq!(body["max_completion_tokens"], 4096);
+        assert!(body.get("max_tokens").is_none());
+
+        // MaxTokens policy: always max_tokens.
+        let p = provider("r1", "custom-x", "http://x/v1")
+            .with_capabilities(OpenAiProviderCapabilities {
+                probe_output_cap_policy: crate::openai::ProbeOutputCapPolicy::MaxTokens,
+                ..OpenAiProviderCapabilities::DEFAULT
+            })
+            .with_model_capabilities(caps(true))
+            .with_max_output_tokens(Some(2048));
+        let mut body = chat_body();
+        p.apply_output_cap_chat(&mut body);
+        assert_eq!(body["max_tokens"], 2048);
+        assert!(body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn output_cap_survives_fork_and_reaches_responses_body() {
+        let p = provider("gpt-5", "openai", "https://api.openai.com/v1")
+            .with_max_output_tokens(Some(4096));
+        let forked = p.fork();
+        let body = forked
+            .prepare_responses_sse_body(
+                vec![ChatMessage::user("hello")],
+                &[],
+                &AgentToolControls::default(),
+            )
+            .unwrap_or_else(|e| panic!("responses body: {e}"));
+        assert_eq!(body["max_output_tokens"], 4096);
+
+        let unset = provider("gpt-5", "openai", "https://api.openai.com/v1")
+            .prepare_responses_sse_body(
+                vec![ChatMessage::user("hello")],
+                &[],
+                &AgentToolControls::default(),
+            )
+            .unwrap_or_else(|e| panic!("responses body: {e}"));
+        assert!(unset.get("max_output_tokens").is_none());
     }
 }

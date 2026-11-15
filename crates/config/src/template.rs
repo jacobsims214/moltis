@@ -137,6 +137,9 @@ loopback_http = true                # Plain HTTP on loopback binds: http://local
 #   model_overrides.<model_id>.context_window - Override context window for a specific model
 #   probe_timeout_secs - Timeout for completion-based model probes (default: 30s).
 #                        Increase for local LLM servers that load large models on first request.
+#   max_output_tokens - Max tokens generated per response turn, sent as max_tokens on
+#                       OpenAI-compatible requests (default: unset = server default).
+#                       model_overrides.<model_id>.max_output_tokens wins for that model.
 
 # [providers]
 # offered = ["local-llm", "lmstudio", "github-copilot", "openai-codex", "openai", "anthropic", "openrouter", "ollama", "moonshot", "minimax", "zai"]

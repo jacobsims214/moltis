@@ -143,6 +143,9 @@ tool_mode = {{ .toolMode | quote }}
 {{- with .models }}
 models = {{ toJson . }}
 {{- end }}
+{{- with .maxOutputTokens }}
+max_output_tokens = {{ int . }}
+{{- end }}
 {{- range $model, $ctx := .contextWindows }}
 
 [providers.{{ $provider }}.model_overrides.{{ $model | quote }}]

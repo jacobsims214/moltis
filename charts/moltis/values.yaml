@@ -36,6 +36,10 @@ defaults:
     models: []
     # Model ID → context window (tokens).
     contextWindows: {}
+    # Max tokens the model may generate per response turn, sent as
+    # max_tokens on every chat request. 0 = no cap (server default, which on
+    # vLLM is the whole remaining context and can run for minutes).
+    maxOutputTokens: 0
     # auto | native | text | off
     toolMode: auto
     # Only offer this provider in the UI (hides cloud providers).

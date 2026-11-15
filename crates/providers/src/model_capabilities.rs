@@ -1,6 +1,31 @@
 //! Model capability heuristics: context window, tool support, vision, reasoning.
 
-use {crate::model_id::capability_model_id, moltis_config::schema::ModelOverride};
+use {
+    crate::model_id::capability_model_id,
+    moltis_config::schema::{ModelOverride, ProviderEntry},
+};
+
+/// Resolve the per-response output-token cap for `model_id` from a provider
+/// config entry.
+///
+/// Precedence (highest to lowest):
+/// 1. `[providers.<name>.model_overrides.<id>].max_output_tokens`, looked up
+///    by the exact model ID first, then by the normalized ID
+///    ([`capability_model_id`]), matching the context-window override keys.
+/// 2. `[providers.<name>].max_output_tokens`.
+///
+/// A value of `0` is treated as unset. `None` means no cap is sent.
+#[must_use]
+pub fn resolve_max_output_tokens(entry: Option<&ProviderEntry>, model_id: &str) -> Option<u32> {
+    let entry = entry?;
+    let from_override = entry
+        .model_overrides
+        .get(model_id)
+        .or_else(|| entry.model_overrides.get(capability_model_id(model_id)))
+        .and_then(|o| o.max_output_tokens)
+        .filter(|&n| n > 0);
+    from_override.or(entry.max_output_tokens.filter(|&n| n > 0))
+}
 
 /// Extract a `HashMap<String, u32>` of model ID → context window from
 /// a `HashMap<String, ModelOverride>`, filtering out entries without a
@@ -1035,9 +1060,11 @@ mod tests_cw_overrides {
         let mut overrides = HashMap::new();
         overrides.insert("claude-opus-4-20250514".into(), ModelOverride {
             context_window: Some(1_000_000),
+            ..Default::default()
         });
         overrides.insert("gpt-4o".into(), ModelOverride {
             context_window: None,
+            ..Default::default()
         });
 
         let extracted = extract_cw_overrides(&overrides);
@@ -1050,5 +1077,62 @@ mod tests_cw_overrides {
     fn extract_cw_overrides_empty() {
         let extracted = extract_cw_overrides(&HashMap::new());
         assert!(extracted.is_empty());
+    }
+
+    #[test]
+    fn resolve_max_output_tokens_unset_by_default() {
+        assert_eq!(resolve_max_output_tokens(None, "qwen"), None);
+        let entry = ProviderEntry::default();
+        assert_eq!(resolve_max_output_tokens(Some(&entry), "qwen"), None);
+    }
+
+    #[test]
+    fn resolve_max_output_tokens_provider_level() {
+        let entry = ProviderEntry {
+            max_output_tokens: Some(4096),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_max_output_tokens(Some(&entry), "custom-muse::qwen3"),
+            Some(4096)
+        );
+    }
+
+    #[test]
+    fn resolve_max_output_tokens_model_override_wins() {
+        let mut entry = ProviderEntry {
+            max_output_tokens: Some(4096),
+            ..Default::default()
+        };
+        entry
+            .model_overrides
+            .insert("big-model".into(), ModelOverride {
+                max_output_tokens: Some(16_384),
+                ..Default::default()
+            });
+        // Override without a cap falls through to the provider value.
+        entry.model_overrides.insert("other".into(), ModelOverride {
+            context_window: Some(32_768),
+            ..Default::default()
+        });
+        assert_eq!(
+            resolve_max_output_tokens(Some(&entry), "big-model"),
+            Some(16_384)
+        );
+        // Normalized lookup: org prefix stripped.
+        assert_eq!(
+            resolve_max_output_tokens(Some(&entry), "org/big-model"),
+            Some(16_384)
+        );
+        assert_eq!(resolve_max_output_tokens(Some(&entry), "other"), Some(4096));
+    }
+
+    #[test]
+    fn resolve_max_output_tokens_zero_is_unset() {
+        let entry = ProviderEntry {
+            max_output_tokens: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(resolve_max_output_tokens(Some(&entry), "qwen"), None);
     }
 }

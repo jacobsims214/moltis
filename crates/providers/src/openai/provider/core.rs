@@ -58,6 +58,7 @@ impl OpenAiProvider {
             context_window_global: std::collections::HashMap::new(),
             context_window_provider: std::collections::HashMap::new(),
             probe_timeout_secs: None,
+            max_output_tokens: None,
         }
     }
 
@@ -116,11 +117,47 @@ impl OpenAiProvider {
         self
     }
 
+    /// Set the per-response output-token cap. `None` (or `Some(0)`) sends no cap.
+    #[must_use]
+    pub fn with_max_output_tokens(mut self, max_output_tokens: Option<u32>) -> Self {
+        self.max_output_tokens = max_output_tokens.filter(|&n| n > 0);
+        self
+    }
+
+    /// Apply the configured output-token cap to a **Chat Completions** body.
+    ///
+    /// Follows the same field choice as the completion probe
+    /// (`probe_output_cap_policy`): reasoning models on providers with the
+    /// `ReasoningModelsUseMaxCompletionTokens` policy get
+    /// `max_completion_tokens` (OpenAI reasoning models reject `max_tokens`;
+    /// vLLM and llama.cpp accept both), everything else gets `max_tokens`.
+    pub(crate) fn apply_output_cap_chat(&self, body: &mut serde_json::Value) {
+        let Some(cap) = self.max_output_tokens else {
+            return;
+        };
+        if matches!(
+            self.capabilities.probe_output_cap_policy,
+            super::super::ProbeOutputCapPolicy::ReasoningModelsUseMaxCompletionTokens
+        ) && self.model_capabilities.reasoning
+        {
+            body["max_completion_tokens"] = serde_json::json!(cap);
+        } else {
+            body["max_tokens"] = serde_json::json!(cap);
+        }
+    }
+
+    /// Apply the configured output-token cap to a **Responses API** body.
+    pub(crate) fn apply_output_cap_responses(&self, body: &mut serde_json::Value) {
+        if let Some(cap) = self.max_output_tokens {
+            body["max_output_tokens"] = serde_json::json!(cap);
+        }
+    }
+
     /// Create a copy of this provider with a fresh metadata cache.
     ///
     /// Centralises the field-by-field copy so callers like
     /// `with_reasoning_effort` stay in sync when new fields are added.
-    fn fork(&self) -> Self {
+    pub(crate) fn fork(&self) -> Self {
         Self {
             api_key: self.api_key.clone(),
             model: self.model.clone(),
@@ -140,6 +177,7 @@ impl OpenAiProvider {
             context_window_global: self.context_window_global.clone(),
             context_window_provider: self.context_window_provider.clone(),
             probe_timeout_secs: self.probe_timeout_secs,
+            max_output_tokens: self.max_output_tokens,
         }
     }
 
