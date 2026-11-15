@@ -88,7 +88,8 @@ defaults:
     searxng:
       enabled: false
       image: searxng/searxng:2026.11.14-a7128d5d1
-      mcpImage: isokoliuk/mcp-searxng:latest
+      # Pinned by digest: these images have no versioned tags worth tracking.
+      mcpImage: isokoliuk/mcp-searxng@sha256:39176ff787129814aa7fbc96250e35b01ccc1bb6586d98ad3963551ba53e405d
       # Full settings.yml override; empty = the tuned files/searxng-settings.yml
       settings: ""
       resources:
@@ -99,7 +100,7 @@ defaults:
         limits: { memory: 256Mi }
     playwright:
       enabled: false
-      image: mcr.microsoft.com/playwright/mcp:latest
+      image: mcr.microsoft.com/playwright/mcp@sha256:cc70a6922ff856f3aba0fe97d0d94220dc9a7f367f6d332facc6d81d9a91e60e
       shmSize: 1Gi
       resources:
         requests: { cpu: 100m, memory: 384Mi }
@@ -154,10 +155,34 @@ defaults:
     tlsSecretName: ""
     middlewares: []
 
-  # Only allow ingress from the ingress controller's namespace.
+  # Moltis polls moltis.org for new releases. Off by default: the chart pins
+  # the image, and the poll tells a third party your IP and version.
+  updateCheck: false
+
   networkPolicy:
     enabled: false
+    # Only allow ingress from the ingress controller's namespace. Turn off
+    # when the instance is reached through a LoadBalancer Service instead.
+    restrictIngress: true
     ingressNamespace: traefik
+    # Egress: DNS and the public internet only. Private ranges (your LAN, the
+    # cluster, link-local/metadata) are blocked so a prompt-injected page
+    # can't steer the agent's browser or shell at internal services; open
+    # what the instance needs with `allow` (e.g. the LLM host).
+    egress:
+      enabled: true
+      blockedCIDRs:
+        - 10.0.0.0/8
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10
+        - 169.254.0.0/16
+      blockedCIDRsV6:
+        - fc00::/7
+        - fe80::/10
+      allow: []
+      #  - cidr: 192.168.1.204/32
+      #    ports: [8000]
 
   nodeSelector: {}
   tolerations: []

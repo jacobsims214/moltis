@@ -79,4 +79,31 @@ their startup probes, so the MCP connections never race the servers.
 - Resources: SearXNG ~200 MiB, its MCP ~64 MiB, Playwright 0.4–2 GiB while
   browsing; per instance.
 
+## Locking it down
+
+```yaml
+defaults:
+  llm:
+    apiKeySecret: { name: moltis-llm-api-key, key: api-key }
+  networkPolicy:
+    enabled: true
+    restrictIngress: false        # true when only reached through Traefik
+    egress:
+      allow:
+        - cidr: 192.168.1.204/32  # the LLM host
+          ports: [8000]
+```
+
+- **Egress** (`networkPolicy.egress`, on whenever `networkPolicy.enabled`):
+  DNS and the public internet only. Your LAN, the cluster and link-local /
+  metadata addresses are blocked, so a prompt-injected web page can't point
+  the agent's browser or shell at internal services. Open what an instance
+  needs with `allow`.
+- **LLM key**: create the Secret without a trailing newline
+  (`openssl rand -hex 32 | tr -d '\n' > key`); a newline breaks the TOML
+  string the key is substituted into and Moltis falls back to no providers.
+- **Update check**: `updateCheck: false` (default) stops Moltis polling
+  moltis.org for releases.
+- Sidecar images are pinned by digest; bump them deliberately.
+
 See `values.yaml` for every option.

@@ -71,6 +71,10 @@ Seed moltis.toml for one instance.
 bind = "0.0.0.0"
 port = {{ int $c.service.port }}
 terminal_enabled = {{ $c.terminal }}
+{{- if not $c.updateCheck }}
+# Update check disabled (updateCheck: false): nothing listens here.
+update_releases_url = "http://127.0.0.1:9/disabled"
+{{- end }}
 
 [tls]
 enabled = false
