@@ -48,6 +48,10 @@ function toolName(card: HTMLElement): string {
 	return mcp ? (mcp[1] ?? first) : first;
 }
 
+function setText(el: Element, text: string): void {
+	if (el.textContent !== text) el.textContent = text;
+}
+
 function refreshLabel(group: HTMLElement): void {
 	const cards = Array.from(group.querySelectorAll<HTMLElement>(":scope > .tool-group-body > .msg.exec-card"));
 	const running = cards.some((c) => c.classList.contains("running"));
@@ -55,14 +59,19 @@ function refreshLabel(group: HTMLElement): void {
 	const n = cards.length;
 	const label = group.querySelector(".tool-group-label");
 	const names = group.querySelector(".tool-group-names");
+	// Only write when the text changes: every write is a subtree mutation that
+	// would re-trigger the observer, regrouping (and forcing layout) every frame.
 	if (label) {
-		label.textContent = running
-			? `Working · ${n} step${n === 1 ? "" : "s"}`
-			: `Used ${n} tool${n === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}`;
+		setText(
+			label,
+			running
+				? `Working · ${n} step${n === 1 ? "" : "s"}`
+				: `Used ${n} tool${n === 1 ? "" : "s"}${failed ? ` · ${failed} failed` : ""}`,
+		);
 	}
 	if (names) {
 		const unique = [...new Set(cards.map(toolName).filter((t) => t !== "tool_search"))];
-		names.textContent = unique.length ? unique.slice(0, 3).join(", ") + (unique.length > 3 ? "…" : "") : "";
+		setText(names, unique.length ? unique.slice(0, 3).join(", ") + (unique.length > 3 ? "…" : "") : "");
 	}
 	group.classList.toggle("running", running);
 	group.classList.toggle("has-error", failed > 0);

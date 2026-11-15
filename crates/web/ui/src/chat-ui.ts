@@ -36,13 +36,65 @@ function clearChatEmptyState(): void {
 // Scroll state for rAF-based auto-scroll — prevents re-entrancy during streaming
 let isAutoScrolling = false;
 
+// Set while a finger is on the chat, or once the user has scrolled away from
+// the bottom. Auto-scroll stays off until they come back down, so streamed
+// tokens never yank the list out from under a touch or momentum scroll (on
+// iOS that fight shows up as the page shaking/blurring).
+let userTouching = false;
+let userDetached = false;
+const scrollWatched = new WeakSet<HTMLElement>();
+
+function watchUserScroll(box: HTMLElement): void {
+	if (scrollWatched.has(box)) return;
+	scrollWatched.add(box);
+	const opts = { passive: true } as const;
+	box.addEventListener(
+		"touchstart",
+		() => {
+			userTouching = true;
+		},
+		opts,
+	);
+	const release = (): void => {
+		userTouching = false;
+		// Let go near the bottom → follow new content again.
+		if (isChatAtBottom()) {
+			userDetached = false;
+			scrollChatToBottom();
+		}
+	};
+	box.addEventListener("touchend", release, opts);
+	box.addEventListener("touchcancel", release, opts);
+	box.addEventListener(
+		"wheel",
+		(e) => {
+			if (e.deltaY < 0) userDetached = true;
+		},
+		opts,
+	);
+	box.addEventListener(
+		"scroll",
+		() => {
+			if (isAutoScrolling) return;
+			if (isChatAtBottom()) {
+				if (!userTouching) userDetached = false;
+			} else if (userTouching) {
+				userDetached = true;
+			}
+		},
+		opts,
+	);
+}
+
 // Scroll chat to bottom using requestAnimationFrame to sync with browser paint cycle.
 // When force=false (default), checks isChatAtBottom() BEFORE scheduling to respect
 // user scroll intent. Pass force=true for imperative scrolls (indicator click,
 // autoScrollMode "always", user-sent messages).
 export function scrollChatToBottom(force = false): void {
 	if (!S.chatMsgBox) return;
-	if (!force && (isAutoScrolling || !isChatAtBottom())) return;
+	watchUserScroll(S.chatMsgBox);
+	if (!force && (isAutoScrolling || userTouching || userDetached || !isChatAtBottom())) return;
+	if (force) userDetached = false;
 
 	isAutoScrolling = true;
 
@@ -75,7 +127,8 @@ export function smartScrollToBottom(): void {
 		scrollChatToBottom(true);
 		return;
 	}
-	if (isChatAtBottom()) {
+	if (S.chatMsgBox) watchUserScroll(S.chatMsgBox);
+	if (!(userTouching || userDetached) && isChatAtBottom()) {
 		scrollChatToBottom();
 	} else {
 		showNewContentIndicator();
