@@ -39,6 +39,48 @@ fn strip_nulls_recursive(map: &mut serde_json::Map<String, serde_json::Value>) {
     }
 }
 
+/// Drop optional top-level arguments a model filled with a placeholder instead
+/// of leaving them out: empty / "null" / "None" strings, or a value outside the
+/// property's `enum`. Some models (Qwen, notably) send every schema property on
+/// every call — `"engines": ""`, `"time_range": "\nnull"` — and strict servers
+/// reject the whole call, which then repeats until the loop detector fires.
+/// Required properties are never touched, so real validation errors still
+/// reach the model.
+fn drop_placeholder_args(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    schema: &serde_json::Value,
+) {
+    let Some(props) = schema.get("properties").and_then(|p| p.as_object()) else {
+        return;
+    };
+    let required: Vec<&str> = schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+        .unwrap_or_default();
+    map.retain(|key, value| {
+        if required.contains(&key.as_str()) {
+            return true;
+        }
+        if let Some(s) = value.as_str()
+            && matches!(
+                s.trim(),
+                "" | "null" | "None" | "none" | "undefined" | "nil"
+            )
+        {
+            return false;
+        }
+        match props
+            .get(key)
+            .and_then(|p| p.get("enum"))
+            .and_then(|e| e.as_array())
+        {
+            Some(allowed) => allowed.contains(value),
+            None => true,
+        }
+    });
+}
+
 /// An `AgentTool` implementation that delegates to an MCP server via `McpClient`.
 pub struct McpToolBridge {
     /// Prefixed tool name: `mcp__<server>__<tool>`.
@@ -151,10 +193,13 @@ impl McpAgentTool for McpToolBridge {
         // 2. Strip null values — these arise from strict-mode schema patching
         //    that makes optional properties nullable.  MCP servers expect
         //    optional fields to be absent, not null.
+        // 3. Drop optional arguments filled with placeholders (see
+        //    `drop_placeholder_args`).
         let params = match params {
             serde_json::Value::Object(mut map) => {
                 map.retain(|k, v| !k.starts_with('_') && !v.is_null());
                 strip_nulls_recursive(&mut map);
+                drop_placeholder_args(&mut map, &self.input_schema);
                 serde_json::Value::Object(map)
             },
             other => other,
@@ -221,6 +266,46 @@ impl McpAgentTool for McpToolBridge {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn drop_placeholder_args_keeps_real_and_required_values() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "query": { "type": "string" },
+                "engines": { "type": "string" },
+                "time_range": { "type": "string", "enum": ["day", "month", "year"] },
+                "safesearch": { "type": "string", "enum": ["0", "1", "2"] },
+                "pageno": { "type": "number" },
+                "note": { "type": "string" }
+            },
+            "required": ["query", "note"]
+        });
+        let mut map = serde_json::json!({
+            "query": "1969 c10",
+            "engines": "",
+            "time_range": "\nnull",
+            "safesearch": "0",
+            "pageno": 1,
+            "note": "",
+            "extra": "None"
+        })
+        .as_object()
+        .cloned()
+        .unwrap();
+        drop_placeholder_args(&mut map, &schema);
+        assert_eq!(
+            serde_json::Value::Object(map),
+            serde_json::json!({ "query": "1969 c10", "safesearch": "0", "pageno": 1, "note": "" })
+        );
+
+        let mut map = serde_json::json!({ "time_range": "week" })
+            .as_object()
+            .cloned()
+            .unwrap();
+        drop_placeholder_args(&mut map, &schema);
+        assert!(map.is_empty(), "values outside the enum are dropped");
+    }
+
     use {
         super::*,
         crate::{
