@@ -105,7 +105,7 @@ spec:
       initContainers:
         # Seed (or, with configOverwrite, replace) moltis.toml on the volume.
         - name: seed-config
-          image: {{ include "moltis.image" $root }}
+          image: {{ include "moltis.instanceImage" $ctx }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           command: ["/bin/sh", "-c"]
           args:
@@ -231,7 +231,10 @@ spec:
             failureThreshold: 60
           # Appended to the image's entrypoint (node cli.js --headless
           # --browser chromium --no-sandbox).
-          args: ["--port", "8931", "--host", "127.0.0.1", "--allowed-hosts", "*", "--isolated"]
+          # --output-dir: large page snapshots and screenshots are saved as
+          # files and only their path is returned, so they go to a volume
+          # shared with Moltis at the same path, where the agent can read them.
+          args: ["--port", "8931", "--host", "127.0.0.1", "--allowed-hosts", "*", "--isolated", "--output-dir", "/tmp/playwright"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -241,10 +244,12 @@ spec:
           volumeMounts:
             - name: dshm
               mountPath: /dev/shm
+            - name: playwright-out
+              mountPath: /tmp/playwright
         {{- end }}
       containers:
         - name: moltis
-          image: {{ include "moltis.image" $root }}
+          image: {{ include "moltis.instanceImage" $ctx }}
           imagePullPolicy: {{ $root.Values.image.pullPolicy }}
           args: ["--bind", "0.0.0.0", "--port", "{{ int $c.service.port }}", "--no-tls"]
           env:
@@ -316,6 +321,10 @@ spec:
             {{- include "moltis.volumeMounts" $ctx | nindent 12 }}
             - name: tmp
               mountPath: /tmp
+            {{- if $c.webTools.playwright.enabled }}
+            - name: playwright-out
+              mountPath: /tmp/playwright
+            {{- end }}
       volumes:
         {{- if $c.webTools.searxng.enabled }}
         - name: searxng-cache
@@ -326,6 +335,9 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ $c.webTools.playwright.shmSize }}
+        - name: playwright-out
+          emptyDir:
+            sizeLimit: 512Mi
         {{- end }}
         - name: seed
           configMap:

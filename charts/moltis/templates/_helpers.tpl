@@ -10,6 +10,15 @@ Chart-level names.
 {{- end }}
 
 {{/*
+Image for one instance: instances.<name>.image.{repository,tag} override the
+release-wide image (handy for canarying a build on one person's instance).
+*/}}
+{{- define "moltis.instanceImage" -}}
+{{- $img := default dict .i.cfg.image -}}
+{{- printf "%s:%s" (default .root.Values.image.repository $img.repository) (default (default .root.Chart.AppVersion .root.Values.image.tag) $img.tag) }}
+{{- end }}
+
+{{/*
 Resolve every enabled instance: defaults deep-merged with the instance's own
 values. Returns YAML: a list of {name, fullname, cfg}.
 */}}
