@@ -43,7 +43,7 @@ use super::{
         resolve_agent_max_iterations,
     },
     sanitize_tool_name, streaming_tool_call_message_content,
-    tool_result::{sanitize_tool_result, tool_result_failure},
+    tool_result::{self, sanitize_tool_result, tool_result_failure},
 };
 
 use crate::tool_loop_detector::ToolLoopDetector;
@@ -1029,6 +1029,8 @@ pub async fn run_agent_loop_streaming_with_limits(
         // Intervention is derived from the detector's post-batch state
         // via `consume_pending_action()` below — see the non-streaming
         // path for the rationale (issue #658).
+        // Images in this batch's results, shown to vision models afterwards.
+        let mut tool_images = Vec::new();
         for (tc, (success, mut result, error, rejected, mut tool_step)) in
             tool_calls.iter().zip(results)
         {
@@ -1111,7 +1113,11 @@ pub async fn run_agent_loop_streaming_with_limits(
 
             // Always sanitize tool results as strings - most LLM APIs don't support
             // multimodal content in tool results. Images are stripped but the UI
-            // still receives them via ToolCallEnd event.
+            // still receives them via ToolCallEnd event, and vision models get
+            // them in a follow-up message after this batch (see below).
+            if provider.supports_vision() {
+                tool_result::collect_tool_result_images(&result, &tc.name, &mut tool_images);
+            }
             let tool_result_str = sanitize_tool_result(&result.to_string(), max_tool_result_bytes);
             instrumentation::finish_tool_step(
                 tool_step.take(),
@@ -1129,6 +1135,10 @@ pub async fn run_agent_loop_streaming_with_limits(
             trace!(tool = %tc.name, content_bytes = tool_result_str.len(), "tool result message prepared");
 
             messages.push(ChatMessage::tool(&tc.id, &tool_result_str));
+        }
+
+        if let Some(images_msg) = tool_result::tool_images_message(tool_images) {
+            messages.push(images_msg);
         }
 
         // Apply loop-detector intervention if one fired during this batch.

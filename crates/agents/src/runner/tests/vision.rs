@@ -392,3 +392,107 @@ fn test_extract_images_in_json_context() {
     assert!(remaining.contains("success"));
     assert!(!remaining.contains(&payload));
 }
+
+/// Records the messages of its second call so the test can check what the
+/// model was shown after a tool returned an image.
+struct RecordingVisionProvider {
+    call_count: std::sync::atomic::AtomicUsize,
+    seen: std::sync::Mutex<Vec<ChatMessage>>,
+}
+
+#[async_trait]
+impl LlmProvider for RecordingVisionProvider {
+    fn name(&self) -> &str {
+        "mock-vision-recording"
+    }
+
+    fn id(&self) -> &str {
+        "gpt-4o"
+    }
+
+    fn supports_tools(&self) -> bool {
+        true
+    }
+
+    fn supports_vision(&self) -> bool {
+        true
+    }
+
+    async fn complete(
+        &self,
+        messages: &[ChatMessage],
+        _tools: &[serde_json::Value],
+    ) -> Result<CompletionResponse> {
+        let count = self
+            .call_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if count == 0 {
+            return Ok(CompletionResponse {
+                reasoning: None,
+                text: None,
+                tool_calls: vec![crate::model::ToolCall {
+                    id: "call_screenshot".into(),
+                    name: "screenshot_tool".into(),
+                    arguments: serde_json::json!({}),
+                    argument_diagnostic: None,
+                    metadata: None,
+                }],
+                usage: Usage::default(),
+            });
+        }
+        *self.seen.lock().unwrap() = messages.to_vec();
+        Ok(CompletionResponse {
+            reasoning: None,
+            text: Some("I can see it".into()),
+            tool_calls: vec![],
+            usage: Usage::default(),
+        })
+    }
+
+    fn stream(
+        &self,
+        _messages: Vec<ChatMessage>,
+    ) -> Pin<Box<dyn Stream<Item = StreamEvent> + Send + '_>> {
+        Box::pin(tokio_stream::empty())
+    }
+}
+
+#[tokio::test]
+async fn test_vision_provider_is_shown_tool_result_images() {
+    let provider = Arc::new(RecordingVisionProvider {
+        call_count: std::sync::atomic::AtomicUsize::new(0),
+        seen: std::sync::Mutex::new(Vec::new()),
+    });
+    let mut tools = ToolRegistry::new();
+    tools.register(Box::new(ScreenshotTool));
+    let uc = UserContent::text("Take a screenshot");
+    let result = run_agent_loop(Arc::clone(&provider) as Arc<dyn LlmProvider>, &tools, "You are a test bot.", &uc, None, None)
+        .await
+        .unwrap();
+    assert_eq!(result.text, "I can see it");
+
+    let seen = provider.seen.lock().unwrap();
+    // The tool message itself stays text-only (blob stripped)...
+    let tool_text = seen
+        .iter()
+        .find_map(|m| match m {
+            ChatMessage::Tool { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("tool result message");
+    assert!(!tool_text.contains("base64,"), "tool message must not carry the blob");
+    // ...and the image follows in a user message the model can see.
+    let images: Vec<_> = seen
+        .iter()
+        .filter_map(|m| match m {
+            ChatMessage::User {
+                content: UserContent::Multimodal(parts),
+                ..
+            } => Some(parts),
+            _ => None,
+        })
+        .flatten()
+        .filter(|p| matches!(p, crate::model::ContentPart::Image { .. }))
+        .collect();
+    assert_eq!(images.len(), 1, "expected the screenshot as an image part: {seen:?}");
+}

@@ -875,6 +875,11 @@ pub(super) async fn complete_startup(
             let t = t.with_firecrawl_config(&config.tools.web.firecrawl);
             tool_registry.register_public(Box::new(t.with_env_provider(Arc::clone(&env_provider))));
         }
+        // Lets vision models look at images (e.g. image-search results)
+        // instead of trusting titles; same SSRF policy as web_fetch.
+        tool_registry.register(Box::new(
+            moltis_tools::view_images::ViewImagesTool::from_fetch_config(&config.tools.web.fetch),
+        ));
         if let Some(t) = moltis_tools::web_fetch::WebFetchTool::from_config(&config.tools.web.fetch)
         {
             #[cfg(feature = "firecrawl")]

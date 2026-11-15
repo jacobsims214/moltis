@@ -190,15 +190,31 @@ impl McpAgentTool for McpToolBridge {
                 _ => None,
             })
             .collect();
+        // Image content (e.g. a browser screenshot) travels as data URIs so the
+        // agent runner can show it to vision models; text-only results keep
+        // their previous shape.
+        let images: Vec<String> = result
+            .content
+            .iter()
+            .filter_map(|c| match c {
+                ToolContent::Image { data, mime_type } if mime_type.starts_with("image/") => {
+                    Some(format!("data:{mime_type};base64,{data}"))
+                },
+                _ => None,
+            })
+            .collect();
 
-        if texts.len() == 1 {
+        let value = if texts.len() == 1 {
             // Try to parse as JSON first.
-            if let Ok(val) = serde_json::from_str(texts[0]) {
-                return Ok(val);
-            }
-            Ok(serde_json::Value::String(texts[0].to_string()))
+            serde_json::from_str(texts[0])
+                .unwrap_or_else(|_| serde_json::Value::String(texts[0].to_string()))
         } else {
-            Ok(serde_json::json!({ "content": texts }))
+            serde_json::json!({ "content": texts })
+        };
+        if images.is_empty() {
+            Ok(value)
+        } else {
+            Ok(serde_json::json!({ "result": value, "images": images }))
         }
     }
 }

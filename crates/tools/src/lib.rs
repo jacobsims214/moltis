@@ -53,6 +53,7 @@ pub mod wasm_engine;
 pub mod wasm_limits;
 #[cfg(feature = "wasm")]
 pub mod wasm_tool_runner;
+pub mod view_images;
 pub mod web_fetch;
 pub mod web_search;
 pub mod webhook_tool;

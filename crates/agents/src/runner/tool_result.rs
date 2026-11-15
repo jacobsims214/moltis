@@ -228,6 +228,54 @@ pub(crate) fn extract_images_from_text_impl(input: &str) -> (Vec<ExtractedImage>
     (images, remaining)
 }
 
+/// Most tool-result images shown to a vision model per batch of tool calls.
+pub(crate) const MAX_TOOL_RESULT_IMAGES: usize = 8;
+
+/// Collect image data URIs from one tool result for a vision model.
+pub(crate) fn collect_tool_result_images(
+    result: &serde_json::Value,
+    tool: &str,
+    into: &mut Vec<(String, ExtractedImage)>,
+) {
+    if into.len() >= MAX_TOOL_RESULT_IMAGES {
+        return;
+    }
+    let (images, _) = extract_images_from_text_impl(&result.to_string());
+    for image in images {
+        if into.len() >= MAX_TOOL_RESULT_IMAGES {
+            break;
+        }
+        into.push((tool.to_string(), image));
+    }
+}
+
+/// One user message carrying a batch's tool-result images, labelled in order.
+///
+/// Chat-completions APIs don't accept images inside `tool` messages, so the
+/// images ride in a follow-up user message right after the tool results;
+/// the text results (with image blobs stripped) still say which image is
+/// which ("image_number" 1, 2, …).
+pub(crate) fn tool_images_message(
+    images: Vec<(String, ExtractedImage)>,
+) -> Option<crate::model::ChatMessage> {
+    use crate::model::{ChatMessage, ContentPart};
+    if images.is_empty() {
+        return None;
+    }
+    let mut parts = vec![ContentPart::Text(format!(
+        "[{} image(s) returned by the tool call(s) above, in order. Look at them before answering.]",
+        images.len()
+    ))];
+    for (i, (tool, image)) in images.into_iter().enumerate() {
+        parts.push(ContentPart::Text(format!("Image {} (from {tool}):", i + 1)));
+        parts.push(ContentPart::Image {
+            media_type: image.media_type,
+            data: image.data,
+        });
+    }
+    Some(ChatMessage::user_multimodal(parts))
+}
+
 /// Test alias for extract_images_from_text_impl
 #[allow(dead_code, clippy::unwrap_used, clippy::expect_used)]
 #[cfg(test)]
