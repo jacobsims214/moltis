@@ -8,8 +8,8 @@ use moltis_common::hooks::{ChannelBinding, HookAction, HookPayload, HookRegistry
 
 use crate::{
     model::{
-        ChatMessage, ToolCall, ToolCallArgumentDiagnostic, ToolCallArgumentSource, Usage,
-        UserContent, provider_values_to_chat_messages,
+        ChatMessage, ContentPart, ToolCall, ToolCallArgumentDiagnostic, ToolCallArgumentSource,
+        Usage, UserContent, provider_values_to_chat_messages,
     },
     response_sanitizer::clean_response,
     tool_loop_detector::{
@@ -529,7 +529,31 @@ pub(crate) fn estimate_prompt_text_tokens(text: &str) -> usize {
 }
 
 #[must_use]
+/// Rough prompt cost of one image part. Vision encoders bill images by
+/// resolution (Qwen-VL: ~one token per 28×28 patch, so a 768 px image is a
+/// few hundred), not by their base64 size; this errs high.
+pub(crate) const IMAGE_PART_TOKEN_ESTIMATE: usize = 1_600;
+
+#[must_use]
 pub(crate) fn estimate_message_tokens(message: &ChatMessage) -> usize {
+    // Multimodal user messages: estimate the text parts and charge a flat
+    // amount per image. Serializing the base64 payload and dividing by four
+    // made a handful of photos look like 200k+ tokens and tripped the
+    // preemptive overflow guard.
+    if let ChatMessage::User {
+        content: UserContent::Multimodal(parts),
+        ..
+    } = message
+    {
+        return parts
+            .iter()
+            .map(|part| match part {
+                ContentPart::Text(text) => estimate_prompt_text_tokens(text),
+                ContentPart::Image { .. } => IMAGE_PART_TOKEN_ESTIMATE,
+            })
+            .sum::<usize>()
+            .saturating_add(4);
+    }
     estimate_prompt_text_tokens(&message.to_openai_value().to_string())
 }
 

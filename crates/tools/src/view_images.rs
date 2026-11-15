@@ -69,7 +69,10 @@ impl ViewImagesTool {
             ssrf_check(&url, &self.ssrf_allowlist).await?;
             let mut resp = client
                 .get(url.as_str())
-                .header(reqwest::header::ACCEPT, "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8")
+                .header(
+                    reqwest::header::ACCEPT,
+                    "image/avif,image/webp,image/png,image/jpeg,image/*;q=0.8",
+                )
                 .send()
                 .await?;
             if resp.status().is_redirection() {
@@ -176,7 +179,8 @@ impl AgentTool for ViewImagesTool {
             .user_agent("Mozilla/5.0 (X11; Linux x86_64) moltis-view-images")
             .build()?;
 
-        let results = futures::future::join_all(urls.iter().map(|u| self.view_one(&client, u))).await;
+        let results =
+            futures::future::join_all(urls.iter().map(|u| self.view_one(&client, u))).await;
 
         let mut images = Vec::new();
         let mut failed = Vec::new();
@@ -221,7 +225,9 @@ mod tests {
     async fn rejects_private_and_non_http_urls() {
         let tool = ViewImagesTool::new();
         let out = tool
-            .execute(serde_json::json!({ "urls": ["http://127.0.0.1/x.png", "file:///etc/passwd"] }))
+            .execute(
+                serde_json::json!({ "urls": ["http://127.0.0.1/x.png", "file:///etc/passwd"] }),
+            )
             .await
             .unwrap();
         assert_eq!(out["shown"], 0);
@@ -243,8 +249,10 @@ mod tests {
             .with_body(png.into_inner())
             .create_async()
             .await;
-        let tool = ViewImagesTool::new()
-            .with_ssrf_allowlist(vec!["127.0.0.0/8".parse().unwrap(), "::1/128".parse().unwrap()]);
+        let tool = ViewImagesTool::new().with_ssrf_allowlist(vec![
+            "127.0.0.0/8".parse().unwrap(),
+            "::1/128".parse().unwrap(),
+        ]);
         let out = tool
             .execute(serde_json::json!({ "urls": [format!("{}/truck.png", server.url())] }))
             .await
@@ -253,7 +261,9 @@ mod tests {
         assert_eq!(out["images"][0]["original_size"], "2000x1000");
         let data = out["images"][0]["image"].as_str().unwrap();
         let b64 = data.strip_prefix("data:image/jpeg;base64,").unwrap();
-        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .unwrap();
         let small = image::load_from_memory(&bytes).unwrap();
         assert_eq!((small.width(), small.height()), (768, 384));
     }

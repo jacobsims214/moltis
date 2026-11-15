@@ -46,6 +46,7 @@ pub mod spawn_agent;
 pub mod spawn_agent_tasks;
 pub mod ssrf;
 pub mod task_list;
+pub mod view_images;
 #[cfg(feature = "wasm")]
 pub mod wasm_component;
 #[cfg(feature = "wasm")]
@@ -53,7 +54,6 @@ pub mod wasm_engine;
 pub mod wasm_limits;
 #[cfg(feature = "wasm")]
 pub mod wasm_tool_runner;
-pub mod view_images;
 pub mod web_fetch;
 pub mod web_search;
 pub mod webhook_tool;

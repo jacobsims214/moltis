@@ -466,9 +466,16 @@ async fn test_vision_provider_is_shown_tool_result_images() {
     let mut tools = ToolRegistry::new();
     tools.register(Box::new(ScreenshotTool));
     let uc = UserContent::text("Take a screenshot");
-    let result = run_agent_loop(Arc::clone(&provider) as Arc<dyn LlmProvider>, &tools, "You are a test bot.", &uc, None, None)
-        .await
-        .unwrap();
+    let result = run_agent_loop(
+        Arc::clone(&provider) as Arc<dyn LlmProvider>,
+        &tools,
+        "You are a test bot.",
+        &uc,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(result.text, "I can see it");
 
     let seen = provider.seen.lock().unwrap();
@@ -480,7 +487,10 @@ async fn test_vision_provider_is_shown_tool_result_images() {
             _ => None,
         })
         .expect("tool result message");
-    assert!(!tool_text.contains("base64,"), "tool message must not carry the blob");
+    assert!(
+        !tool_text.contains("base64,"),
+        "tool message must not carry the blob"
+    );
     // ...and the image follows in a user message the model can see.
     let images: Vec<_> = seen
         .iter()
@@ -494,5 +504,28 @@ async fn test_vision_provider_is_shown_tool_result_images() {
         .flatten()
         .filter(|p| matches!(p, crate::model::ContentPart::Image { .. }))
         .collect();
-    assert_eq!(images.len(), 1, "expected the screenshot as an image part: {seen:?}");
+    assert_eq!(
+        images.len(),
+        1,
+        "expected the screenshot as an image part: {seen:?}"
+    );
+}
+
+#[test]
+fn test_image_parts_are_estimated_flat_not_by_base64_size() {
+    use crate::runner::helpers::{IMAGE_PART_TOKEN_ESTIMATE, estimate_message_tokens};
+    // ~600 KB of base64 — six downscaled photos' worth in one part.
+    let msg = ChatMessage::user_multimodal(vec![
+        crate::model::ContentPart::Text("Image 1:".into()),
+        crate::model::ContentPart::Image {
+            media_type: "image/jpeg".into(),
+            data: "A".repeat(600_000),
+        },
+    ]);
+    let est = estimate_message_tokens(&msg);
+    assert!(
+        est < IMAGE_PART_TOKEN_ESTIMATE + 100,
+        "estimate {est} should not scale with base64 size"
+    );
+    assert!(est >= IMAGE_PART_TOKEN_ESTIMATE);
 }

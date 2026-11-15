@@ -430,7 +430,10 @@ mod tests {
             .execute(serde_json::json!({ "query": "memory", "name": "" }))
             .await
             .unwrap();
-        assert!(result.get("results").is_some(), "expected search results, got {result}");
+        assert!(
+            result.get("results").is_some(),
+            "expected search results, got {result}"
+        );
         assert!(result.get("error").is_none());
     }
 
@@ -443,10 +446,16 @@ mod tests {
                 .execute(serde_json::json!({ "query": "memory", "name": name }))
                 .await
                 .unwrap();
-            assert!(result.get("results").is_some(), "{name}: expected search results, got {result}");
+            assert!(
+                result.get("results").is_some(),
+                "{name}: expected search results, got {result}"
+            );
         }
         // Without a query, an unknown name still gets the recovery response.
-        let result = search_tool.execute(serde_json::json!({ "name": "no_such_tool" })).await.unwrap();
+        let result = search_tool
+            .execute(serde_json::json!({ "name": "no_such_tool" }))
+            .await
+            .unwrap();
         assert_eq!(result["error"], "unknown tool: no_such_tool");
     }
 

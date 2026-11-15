@@ -850,7 +850,9 @@ mod tests {
 
         let init_a = server
             .mock("POST", "/")
-            .match_body(Matcher::PartialJsonString(r#"{"id":1,"method":"initialize"}"#.into()))
+            .match_body(Matcher::PartialJsonString(
+                r#"{"id":1,"method":"initialize"}"#.into(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_header("mcp-session-id", "session-a")
@@ -860,14 +862,18 @@ mod tests {
         let expired = server
             .mock("POST", "/")
             .match_header("mcp-session-id", "session-a")
-            .match_body(Matcher::PartialJsonString(r#"{"method":"tools/call"}"#.into()))
+            .match_body(Matcher::PartialJsonString(
+                r#"{"method":"tools/call"}"#.into(),
+            ))
             .with_status(404)
             .with_body("Session not found")
             .create_async()
             .await;
         let init_b = server
             .mock("POST", "/")
-            .match_body(Matcher::PartialJsonString(r#"{"id":3,"method":"initialize"}"#.into()))
+            .match_body(Matcher::PartialJsonString(
+                r#"{"id":3,"method":"initialize"}"#.into(),
+            ))
             .match_header("mcp-session-id", Matcher::Missing)
             .with_status(200)
             .with_header("content-type", "application/json")
@@ -878,14 +884,18 @@ mod tests {
         let initialized = server
             .mock("POST", "/")
             .match_header("mcp-session-id", "session-b")
-            .match_body(Matcher::PartialJsonString(r#"{"method":"notifications/initialized"}"#.into()))
+            .match_body(Matcher::PartialJsonString(
+                r#"{"method":"notifications/initialized"}"#.into(),
+            ))
             .with_status(202)
             .create_async()
             .await;
         let retried = server
             .mock("POST", "/")
             .match_header("mcp-session-id", "session-b")
-            .match_body(Matcher::PartialJsonString(r#"{"id":2,"method":"tools/call"}"#.into()))
+            .match_body(Matcher::PartialJsonString(
+                r#"{"id":2,"method":"tools/call"}"#.into(),
+            ))
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"jsonrpc":"2.0","id":2,"result":{"content":[]}}"#)
@@ -894,14 +904,23 @@ mod tests {
 
         let transport = SseTransport::new(&server.url()).unwrap();
         transport
-            .request("initialize", Some(serde_json::json!({"protocolVersion": "2025-06-18"})))
+            .request(
+                "initialize",
+                Some(serde_json::json!({"protocolVersion": "2025-06-18"})),
+            )
             .await
             .unwrap();
         let resp = transport
-            .request("tools/call", Some(serde_json::json!({"name": "browser_snapshot"})))
+            .request(
+                "tools/call",
+                Some(serde_json::json!({"name": "browser_snapshot"})),
+            )
             .await
             .unwrap();
-        assert!(resp.result.is_some(), "retried call should succeed: {resp:?}");
+        assert!(
+            resp.result.is_some(),
+            "retried call should succeed: {resp:?}"
+        );
 
         init_a.assert_async().await;
         expired.assert_async().await;
