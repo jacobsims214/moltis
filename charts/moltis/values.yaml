@@ -79,6 +79,39 @@ defaults:
       - "nodes_*"
       - "codebase_*"
 
+  # Built-in skills to hide (bundled skill names). The Google ones need
+  # credentials these instances don't have and pull the model into setup
+  # detours (checking for tokens, running setup scripts).
+  disabledBundledSkills:
+    - gog
+    - google-workspace
+
+  # Paths the file tools (Read/Glob/Grep/Write/Edit) refuse. Shell access to
+  # the same files needs explicit approval (moltis credential-file floor).
+  fsDenyPaths:
+    - /home/moltis/.moltis/mcp-servers.json
+    - /home/moltis/.config/moltis/**
+    - /proc/*/environ
+
+  # Extra sections appended once to the agent's TOOLS.md (name: markdown).
+  # Each is keyed by its first "## " heading, so editing the text later
+  # doesn't duplicate it.
+  toolsNotes: {}
+
+  # The family's shared hub (home-os) as an MCP server: tools mcp__home-os__*,
+  # a per-member token from a Secret (never written to mcp-servers.json),
+  # egress opened to the MCP pod only, and household guidance in TOOLS.md.
+  householdHub:
+    enabled: false
+    url: http://home-os-mcp.home-os.svc.cluster.local:8082/mcp
+    namespace: home-os
+    podLabels: { app: home-os-mcp }
+    port: 8082
+    # Secret holding this member's home-os bearer token.
+    tokenSecret:
+      name: ""
+      key: token
+
   # Web search + browsing as pod sidecars (localhost only), registered as
   # MCP servers and replacing Moltis's built-in web_search/browser tools:
   #   searxng      — our own meta search (web, images, news), JSON API
@@ -183,6 +216,12 @@ defaults:
       allow: []
       #  - cidr: 192.168.1.204/32
       #    ports: [8000]
+      # In-cluster services an instance may reach (pod IPs fall in the
+      # blocked ranges, so they need an explicit selector).
+      allowPods: []
+      #  - namespace: home-os
+      #    podLabels: { app: home-os-mcp }
+      #    ports: [8082]
 
   nodeSelector: {}
   tolerations: []

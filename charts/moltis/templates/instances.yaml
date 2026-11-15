@@ -20,9 +20,9 @@ data:
   mcp-servers.json: |
     {{- include "moltis.mcpServersJson" $ctx | nindent 4 }}
   {{- end }}
-  {{- if or $c.webTools.searxng.enabled $c.webTools.playwright.enabled }}
-  web-tools.md: |
-    {{- $root.Files.Get "files/web-tools.md" | nindent 4 }}
+  {{- range $name, $md := (include "moltis.toolsNotes" $ctx | fromYaml) }}
+  notes-{{ $name }}.md: |
+    {{- $md | nindent 4 }}
   {{- end }}
   {{- if $c.webTools.searxng.enabled }}
   searxng-settings.yml: |
@@ -142,13 +142,19 @@ spec:
                 console.log("mcp-servers.json: added", added.length ? added.join(", ") : "nothing");
               '
               {{- end }}
-              {{- if or $c.webTools.searxng.enabled $c.webTools.playwright.enabled }}
-              # Web search/browsing notes for the agent, appended once.
-              T=/home/moltis/.moltis/TOOLS.md
-              if ! grep -q "## Web search and browsing" "$T" 2>/dev/null; then
-                printf '\n' >> "$T"; cat /seed/web-tools.md >> "$T"; echo "TOOLS.md: web tools notes added"
-              fi
-              {{- end }}
+              # Tool notes for the agent, each appended once (keyed by its first
+              # "## " heading). Moltis copies the root TOOLS.md to
+              # agents/main/TOOLS.md on first start and reads only that copy
+              # afterwards, so write to whichever file is live.
+              T=/home/moltis/.moltis/agents/main/TOOLS.md
+              [ -f "$T" ] || T=/home/moltis/.moltis/TOOLS.md
+              for n in /seed/notes-*.md; do
+                [ -f "$n" ] || continue
+                h=$(grep -m1 '^## ' "$n")
+                if [ -n "$h" ] && ! grep -qF "$h" "$T" 2>/dev/null; then
+                  printf '\n' >> "$T"; cat "$n" >> "$T"; echo "TOOLS.md: added $h"
+                fi
+              done
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -280,6 +286,13 @@ spec:
                   name: {{ .name }}
                   key: {{ .key }}
             {{- end }}
+            {{- end }}
+            {{- if and $c.householdHub.enabled $c.householdHub.tokenSecret.name }}
+            - name: MOLTIS_MCP_HOME_OS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $c.householdHub.tokenSecret.name }}
+                  key: {{ $c.householdHub.tokenSecret.key }}
             {{- end }}
             {{- with $c.env }}
             {{- toYaml . | nindent 12 }}
@@ -455,6 +468,30 @@ spec:
         - ipBlock:
             cidr: ::/0
             except: {{ toJson $np.egress.blockedCIDRsV6 }}
+    {{- $allowPods := $np.egress.allowPods | default list }}
+    {{- with $c.householdHub }}
+    {{- if .enabled }}
+    {{- $allowPods = append $allowPods (dict "namespace" .namespace "podLabels" .podLabels "ports" (list .port)) }}
+    {{- end }}
+    {{- end }}
+    {{- range $allowPods }}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace }}
+          {{- with .podLabels }}
+          podSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+          {{- end }}
+      {{- with .ports }}
+      ports:
+        {{- range . }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+      {{- end }}
+    {{- end }}
     {{- range $np.egress.allow }}
     - to:
         - ipBlock:

@@ -67,6 +67,13 @@ impl ToolSearchTool {
         results
     }
 
+    fn search_results(&self, query: &str) -> serde_json::Value {
+        self.keyword_search(query)
+            .into_iter()
+            .map(|(name, desc, _score)| serde_json::json!({ "name": name, "description": desc }))
+            .collect()
+    }
+
     fn activate_tool(&self, name: &str) -> serde_json::Value {
         let Some(tool) = self.full_registry.get(name) else {
             return self.unknown_tool_response(name);
@@ -99,6 +106,60 @@ impl ToolSearchTool {
             "description": description,
             "parameters": schema,
             "hint": format!("Tool `{name}` is now available. Call it directly on your next turn.")
+        })
+    }
+
+    /// Tool names matching a wildcard / server prefix: `mcp__home-os__*`,
+    /// `mcp__home-os__` or `mcp__home-os` all mean "every home-os tool".
+    fn prefix_matches(&self, pattern: &str) -> Vec<String> {
+        let prefix = if let Some(p) = pattern.strip_suffix('*') {
+            p.to_string()
+        } else if pattern.starts_with("mcp__") && self.full_registry.get(pattern).is_none() {
+            if pattern.ends_with("__") {
+                pattern.to_string()
+            } else {
+                format!("{pattern}__")
+            }
+        } else {
+            return Vec::new();
+        };
+        if prefix.len() < 3 {
+            return Vec::new();
+        }
+        let mut names: Vec<String> = self
+            .full_registry
+            .list_names()
+            .into_iter()
+            .filter(|name| name.starts_with(&prefix) && name != "tool_search")
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Activate every tool in `names`, returning a compact summary (the full
+    /// schemas reach the model through the tool list on the next turn).
+    fn activate_many(&self, names: &[String]) -> serde_json::Value {
+        let activated: Vec<serde_json::Value> = names
+            .iter()
+            .filter_map(|name| {
+                let result = self.activate_tool(name);
+                (result.get("activated").and_then(serde_json::Value::as_bool) == Some(true)).then(
+                    || {
+                        let desc = result
+                            .get("description")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
+                        let short: String = desc.chars().take(120).collect();
+                        serde_json::json!({ "name": name, "description": short })
+                    },
+                )
+            })
+            .collect();
+        serde_json::json!({
+            "activated": !activated.is_empty(),
+            "count": activated.len(),
+            "tools": activated,
+            "hint": "These tools are now available. Call them directly on your next turn."
         })
     }
 
@@ -146,7 +207,9 @@ impl AgentTool for ToolSearchTool {
     fn description(&self) -> &str {
         "Search for available tools by keyword, or activate a specific tool by exact name. \
          Use `query` to find tools (returns name + description, max 15 results). \
-         Use `name` to activate a tool and get its full parameter schema."
+         Use `name` to activate a tool and get its full parameter schema; pass several \
+         comma-separated names, or `mcp__<server>__*` to activate every tool of a connected \
+         MCP server in one call."
     }
 
     fn parameters_schema(&self) -> serde_json::Value {
@@ -159,7 +222,7 @@ impl AgentTool for ToolSearchTool {
                 },
                 "name": {
                     "type": "string",
-                    "description": "Exact tool name to activate (returns full schema)"
+                    "description": "Exact tool name to activate, comma-separated names, or mcp__<server>__* for a whole MCP server"
                 }
             },
             "additionalProperties": false
@@ -181,32 +244,52 @@ impl AgentTool for ToolSearchTool {
         let name = field("name");
         let query = field("query");
 
+        // Several names, a wildcard or a server prefix activate a batch in one
+        // call instead of one round trip per tool.
+        if let Some(name) = name {
+            let names: Vec<String> = if name.contains(',') {
+                name.split(',')
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                    .flat_map(|n| {
+                        let batch = self.prefix_matches(n);
+                        if batch.is_empty() {
+                            vec![n.to_string()]
+                        } else {
+                            batch
+                        }
+                    })
+                    .collect()
+            } else {
+                self.prefix_matches(name)
+            };
+            if !names.is_empty() {
+                let mut out = self.activate_many(&names);
+                if let Some(query) = query {
+                    out["search_results"] = self.search_results(query);
+                }
+                return Ok(out);
+            }
+        }
+
         // A name that matches nothing falls back to searching when a query was
         // given too, instead of returning an error the model may repeat.
         let name = name.filter(|n| query.is_none() || self.full_registry.get(n).is_some());
 
         match (name, query) {
-            (Some(name), _) => {
-                // Activate a specific tool by name.
-                Ok(self.activate_tool(name))
+            (Some(name), query) => {
+                // Activate a specific tool by name; a query sent alongside it
+                // is still answered rather than silently dropped.
+                let mut out = self.activate_tool(name);
+                if let Some(query) = query {
+                    out["search_results"] = self.search_results(query);
+                }
+                Ok(out)
             },
-            (None, Some(query)) => {
-                // Keyword search.
-                let results = self.keyword_search(query);
-                let items: Vec<serde_json::Value> = results
-                    .into_iter()
-                    .map(|(name, desc, _score)| {
-                        serde_json::json!({
-                            "name": name,
-                            "description": desc
-                        })
-                    })
-                    .collect();
-                Ok(serde_json::json!({
-                    "results": items,
-                    "hint": "To use a tool, call tool_search again with `name` set to the exact tool name."
-                }))
-            },
+            (None, Some(query)) => Ok(serde_json::json!({
+                "results": self.search_results(query),
+                "hint": "To use a tool, call tool_search again with `name` set to the exact tool name, several comma-separated names, or `mcp__<server>__*` for a whole MCP server."
+            })),
             (None, None) => Err(anyhow::anyhow!(
                 "Provide either `name` (to activate a tool) or `query` (to search)."
             )),
@@ -329,6 +412,70 @@ mod tests {
         let names = lazy.list_names();
         assert_eq!(names.len(), 1);
         assert!(names.contains(&"tool_search".to_string()));
+    }
+
+    fn registry_with_home_os() -> ToolRegistry {
+        let mut registry = build_full_registry();
+        for (name, desc) in [
+            ("mcp__home-os__list_events", "List calendar events"),
+            ("mcp__home-os__create_event", "Create a calendar event"),
+        ] {
+            registry.register_mcp(
+                Box::new(DummyTool::new(name, desc)),
+                moltis_config::schema::McpServerId::from("home-os"),
+            );
+        }
+        registry
+    }
+
+    #[tokio::test]
+    async fn wildcard_and_server_prefix_activate_whole_mcp_server() {
+        for pattern in ["mcp__home-os__*", "mcp__home-os", "mcp__home-os__"] {
+            let lazy = wrap_registry_lazy(registry_with_home_os());
+            let search_tool = lazy.get("tool_search").unwrap();
+            let result = search_tool
+                .execute(serde_json::json!({ "name": pattern }))
+                .await
+                .unwrap();
+            assert_eq!(result["count"], 2, "{pattern}: {result}");
+            assert!(lazy.get("mcp__home-os__list_events").is_some(), "{pattern}");
+            assert!(
+                lazy.get("mcp__home-os__create_event").is_some(),
+                "{pattern}"
+            );
+            assert!(lazy.get("exec").is_none(), "{pattern}");
+        }
+    }
+
+    #[tokio::test]
+    async fn comma_separated_names_activate_each() {
+        let lazy = wrap_registry_lazy(registry_with_home_os());
+        let search_tool = lazy.get("tool_search").unwrap();
+        let result = search_tool
+            .execute(serde_json::json!({ "name": "exec, mcp__home-os__list_events" }))
+            .await
+            .unwrap();
+        assert_eq!(result["count"], 2, "{result}");
+        assert!(lazy.get("exec").is_some());
+        assert!(lazy.get("mcp__home-os__list_events").is_some());
+    }
+
+    #[tokio::test]
+    async fn query_alongside_valid_name_is_answered() {
+        let lazy = wrap_registry_lazy(registry_with_home_os());
+        let search_tool = lazy.get("tool_search").unwrap();
+        let result = search_tool
+            .execute(serde_json::json!({ "name": "exec", "query": "calendar" }))
+            .await
+            .unwrap();
+        assert_eq!(result["activated"], true);
+        let found: Vec<&str> = result["search_results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["name"].as_str().unwrap())
+            .collect();
+        assert!(found.contains(&"mcp__home-os__list_events"), "{result}");
     }
 
     #[test]

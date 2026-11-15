@@ -28,6 +28,7 @@ impl ResolvedRemoteConfig {
         config: &McpServerConfig,
         env_overrides: &HashMap<String, String>,
     ) -> Result<Self> {
+        let env_overrides = &with_mcp_process_env(env_overrides);
         let raw_url = config.url.as_ref().context("missing remote MCP url")?;
         let display_url = sanitize_url_for_display(raw_url.expose_secret());
         let request_url = substitute_env_placeholders(raw_url.expose_secret(), env_overrides)
@@ -177,9 +178,47 @@ fn is_reserved_header(name: &str) -> bool {
     )
 }
 
+/// Prefix of process environment variables that remote MCP URLs and headers
+/// may reference (`Bearer ${MOLTIS_MCP_HOME_OS_TOKEN}`). Other process env
+/// stays out of reach so a configured server can't pull in e.g. the gateway
+/// password; deployments inject per-server tokens from secrets this way
+/// instead of writing them into `mcp-servers.json`.
+pub const MCP_PROCESS_ENV_PREFIX: &str = "MOLTIS_MCP_";
+
+fn with_mcp_process_env(overrides: &HashMap<String, String>) -> HashMap<String, String> {
+    let mut merged: HashMap<String, String> = std::env::vars()
+        .filter(|(name, _)| name.starts_with(MCP_PROCESS_ENV_PREFIX))
+        .collect();
+    // Explicit overrides (UI-managed env) win over the process environment.
+    merged.extend(overrides.iter().map(|(k, v)| (k.clone(), v.clone())));
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_prefixed_process_env_is_available_others_are_not() {
+        // SAFETY: test-only env mutation with names unique to this test.
+        unsafe {
+            std::env::set_var("MOLTIS_MCP_TEST_TOKEN_X1", "tok123");
+            std::env::set_var("MOLTIS_TEST_SECRET_X1", "nope");
+        }
+        let merged = with_mcp_process_env(&HashMap::new());
+        assert_eq!(
+            substitute_env_placeholders("Bearer ${MOLTIS_MCP_TEST_TOKEN_X1}", &merged),
+            "Bearer tok123"
+        );
+        assert!(!merged.contains_key("MOLTIS_TEST_SECRET_X1"));
+        let explicit = HashMap::from([("MOLTIS_MCP_TEST_TOKEN_X1".to_string(), "ui".to_string())]);
+        assert_eq!(
+            with_mcp_process_env(&explicit)
+                .get("MOLTIS_MCP_TEST_TOKEN_X1")
+                .map(String::as_str),
+            Some("ui")
+        );
+    }
 
     #[test]
     fn substitute_env_placeholders_supports_braced_and_bare_keys() {

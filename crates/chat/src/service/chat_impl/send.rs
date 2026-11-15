@@ -1279,6 +1279,36 @@ impl LiveChatService {
                     .into()),
             };
 
+            // A run that ends without output (timeout, hung stream, provider
+            // error) used to leave nothing in the session: the live error
+            // event is gone on reload, so the user just sees their message go
+            // unanswered. Persist a short reply saying what got done.
+            if assistant_text.is_none() && !ephemeral {
+                let error = state
+                    .last_run_error(&run_id_clone)
+                    .await
+                    .unwrap_or_else(|| "agent run failed".to_string());
+                let history = session_store
+                    .read(&session_key_clone)
+                    .await
+                    .unwrap_or_default();
+                let text = incomplete_turn_message(&history, &error);
+                let msg = PersistedMessage::assistant(
+                    text,
+                    model_id.clone(),
+                    provider_name.clone(),
+                    0,
+                    0,
+                    None,
+                );
+                if let Err(e) = session_store
+                    .append(&session_key_clone, &msg.to_value())
+                    .await
+                {
+                    warn!("failed to persist incomplete-turn message: {e}");
+                }
+            }
+
             // Channel delivery is complete when a successful output returns.
             // Claim terminal ownership before persistence so abort cannot turn
             // a committed assistant message into an aborted run.
@@ -1470,5 +1500,91 @@ impl LiveChatService {
             "chat.send: returning run id"
         );
         Ok(serde_json::json!({ "ok": true, "runId": run_id }))
+    }
+}
+
+/// Reply persisted when a turn ends without output, summarising the tool calls
+/// that completed after the latest user message so the user (and the model on
+/// the next turn) know what already happened.
+fn incomplete_turn_message(history: &[serde_json::Value], error: &str) -> String {
+    let start = history
+        .iter()
+        .rposition(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        .map_or(0, |i| i + 1);
+    let mut done: Vec<(String, usize)> = Vec::new();
+    for m in &history[start..] {
+        if m.get("role").and_then(|r| r.as_str()) != Some("tool_result")
+            || m.get("success").and_then(|s| s.as_bool()) != Some(true)
+        {
+            continue;
+        }
+        let Some(name) = m.get("tool_name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        if name == "tool_search" {
+            continue;
+        }
+        let short = name.rsplit("__").next().unwrap_or(name).to_string();
+        match done.iter_mut().find(|(n, _)| *n == short) {
+            Some((_, count)) => *count += 1,
+            None => done.push((short, 1)),
+        }
+    }
+    let reason = if error.contains("timed out") {
+        "I ran out of time before finishing this one".to_string()
+    } else {
+        let detail: String = error.chars().take(160).collect();
+        format!("I hit an error before finishing this one ({detail})")
+    };
+    let completed = if done.is_empty() {
+        "Nothing was changed.".to_string()
+    } else {
+        let list = done
+            .iter()
+            .map(|(n, c)| {
+                if *c > 1 {
+                    format!("{n} ×{c}")
+                } else {
+                    n.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Before stopping I completed: {list}. Check those before retrying so nothing is done twice."
+        )
+    };
+    format!("⚠️ {reason}. {completed} Ask me to continue, or split the request into smaller steps.")
+}
+
+#[cfg(test)]
+mod incomplete_turn_tests {
+    use {super::incomplete_turn_message, serde_json::json};
+
+    #[test]
+    fn lists_tools_completed_since_the_last_user_message() {
+        let history = vec![
+            json!({"role": "user", "content": "earlier"}),
+            json!({"role": "tool_result", "tool_name": "mcp__home-os__delete_event", "success": true}),
+            json!({"role": "user", "content": "add soccer and the dentist"}),
+            json!({"role": "tool_result", "tool_name": "tool_search", "success": true}),
+            json!({"role": "tool_result", "tool_name": "mcp__home-os__create_event", "success": true}),
+            json!({"role": "tool_result", "tool_name": "mcp__home-os__create_event", "success": true}),
+            json!({"role": "tool_result", "tool_name": "mcp__home-os__list_events", "success": false}),
+        ];
+        let text = incomplete_turn_message(&history, "agent run timed out after 600s");
+        assert!(text.contains("ran out of time"), "{text}");
+        assert!(text.contains("create_event ×2"), "{text}");
+        assert!(!text.contains("delete_event"), "{text}");
+        assert!(!text.contains("tool_search"), "{text}");
+        assert!(!text.contains("list_events"), "{text}");
+    }
+
+    #[test]
+    fn says_nothing_changed_when_no_tool_completed() {
+        let history = vec![json!({"role": "user", "content": "hi"})];
+        let text = incomplete_turn_message(&history, "provider error: 500");
+        assert!(text.contains("hit an error"), "{text}");
+        assert!(text.contains("Nothing was changed"), "{text}");
     }
 }

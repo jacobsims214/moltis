@@ -92,6 +92,16 @@ deny = {{ toJson . }}
 
 [tools.exec.sandbox]
 backend = {{ $c.sandboxBackend | quote }}
+{{- with $c.fsDenyPaths }}
+
+[tools.fs]
+deny_paths = {{ toJson . }}
+{{- end }}
+{{- with $c.disabledBundledSkills }}
+
+[skills]
+disabled_bundled_skills = {{ toJson . }}
+{{- end }}
 {{- if or $c.displayName $c.timezone }}
 
 [user]
@@ -169,7 +179,9 @@ Seed mcp-servers.json for one instance.
 {{- define "moltis.mcpServersJson" -}}
 {{- $servers := dict }}
 {{- range $name, $srv := (include "moltis.effectiveMcpServers" . | fromYaml) }}
-{{- $_ := set $servers $name (dict "command" (default "" $srv.command) "args" (default list $srv.args) "enabled" (ne (toString $srv.enabled) "false") "transport" (default "streamable-http" $srv.transport) "url" (default "" $srv.url)) }}
+{{- $entry := dict "command" (default "" $srv.command) "args" (default list $srv.args) "enabled" (ne (toString $srv.enabled) "false") "transport" (default "streamable-http" $srv.transport) "url" (default "" $srv.url) }}
+{{- with $srv.headers }}{{ $_ := set $entry "headers" . }}{{ end }}
+{{- $_ := set $servers $name $entry }}
 {{- end }}
 {{- dict "servers" $servers | toPrettyJson }}
 {{- end }}
@@ -185,6 +197,11 @@ User MCP servers plus the web-tool sidecars that are enabled.
 {{- if .i.cfg.webTools.playwright.enabled }}
 {{- $_ := set $servers "playwright" (dict "transport" "streamable-http" "url" "http://127.0.0.1:8931/mcp") }}
 {{- end }}
+{{- with .i.cfg.householdHub }}
+{{- if .enabled }}
+{{- $_ := set $servers "home-os" (dict "transport" "streamable-http" "url" .url "headers" (dict "Authorization" "Bearer ${MOLTIS_MCP_HOME_OS_TOKEN}")) }}
+{{- end }}
+{{- end }}
 {{- toYaml $servers }}
 {{- end }}
 
@@ -196,4 +213,20 @@ User MCP servers plus the web-tool sidecars that are enabled.
 {{- else -}}
 {{ .root.Files.Get "files/searxng-settings.yml" | replace "{{SECRET}}" $secret }}
 {{- end -}}
+{{- end }}
+
+{{/*
+TOOLS.md sections for one instance: web-tools notes, household hub notes and
+any toolsNotes entries, as a name -> markdown map.
+*/}}
+{{- define "moltis.toolsNotes" -}}
+{{- $c := .i.cfg -}}
+{{- $notes := deepCopy (default dict $c.toolsNotes) }}
+{{- if or $c.webTools.searxng.enabled $c.webTools.playwright.enabled }}
+{{- $_ := set $notes "web-tools" (.root.Files.Get "files/web-tools.md") }}
+{{- end }}
+{{- if $c.householdHub.enabled }}
+{{- $_ := set $notes "household-hub" (.root.Files.Get "files/notes/household-hub.md") }}
+{{- end }}
+{{- toYaml $notes }}
 {{- end }}

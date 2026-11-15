@@ -250,6 +250,18 @@ static DANGEROUS_PATTERN_DEFS: &[(&str, &str)] = &[
         r"(?i)(?:^|[;&|]\s*)(BASH_ENV|ZDOTDIR)=\S",
         "dangerous shell startup env var",
     ),
+    // Moltis's own credential stores. Agent commands run as the gateway's
+    // user, so "read-only" safe bins (`cat`, `grep`, `head`, …) could
+    // otherwise print MCP bearer tokens and provider keys straight into the
+    // model context and chat history.
+    (
+        r"(?i)(mcp-servers\.json|moltis\.toml|provider_keys|credentials\.json|oauth_tokens|\.moltis/(vault|secrets?)\b)",
+        "moltis credential file access",
+    ),
+    (
+        r"(?i)/proc/(\d+|self|\*)/environ",
+        "process environment read",
+    ),
 ];
 
 static DANGEROUS_SET: std::sync::LazyLock<RegexSet> = std::sync::LazyLock::new(|| {
@@ -731,6 +743,28 @@ pub enum ApprovalAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn credential_files_are_never_auto_approved() {
+        for cmd in [
+            "cat /home/moltis/.moltis/mcp-servers.json",
+            "grep -r token ~/.config/moltis/moltis.toml",
+            "head -c 400 /proc/1/environ",
+            "cat /proc/self/environ | tr '\\0' '\\n'",
+        ] {
+            assert_eq!(
+                check_dangerous(cmd),
+                Some(if cmd.contains("environ") {
+                    "process environment read"
+                } else {
+                    "moltis credential file access"
+                }),
+                "{cmd}"
+            );
+        }
+        assert_eq!(check_dangerous("cat ~/.moltis/TOOLS.md"), None);
+        assert_eq!(check_dangerous("ls ~/.moltis"), None);
+    }
 
     #[test]
     fn test_extract_first_bin() {

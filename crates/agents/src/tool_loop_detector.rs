@@ -11,7 +11,11 @@
 //!    schema list to the LLM so it *physically* cannot emit another tool call.
 //!
 //! A successful tool call resets both the ring buffer and the escalation
-//! stage.
+//! stage — unless it is the same successful call (tool + arguments) repeated
+//! [`SUCCESS_REPEAT_THRESHOLD`] times in a row. Re-running an identical call
+//! that already succeeded returns nothing new, and local models do get stuck
+//! that way (dozens of identical `update_event` / `list_calendars` calls), so
+//! that pattern escalates exactly like a failure loop.
 
 use std::{
     collections::{VecDeque, hash_map::DefaultHasher},
@@ -19,6 +23,9 @@ use std::{
 };
 
 use serde_json::Value;
+
+/// Consecutive identical *successful* calls that count as a loop.
+pub const SUCCESS_REPEAT_THRESHOLD: usize = 3;
 
 /// Fingerprint of a single tool-call outcome used for loop detection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +118,9 @@ pub struct ToolLoopDetector {
     /// the current intervention cycle. Cleared on a hard reset (success or
     /// `clear_strip_tools`).
     nudge_delivered: bool,
+    /// Last successful call and how many times in a row it has repeated.
+    last_success: Option<ToolCallFingerprint>,
+    success_streak: usize,
 }
 
 impl ToolLoopDetector {
@@ -124,6 +134,8 @@ impl ToolLoopDetector {
             strip_on_second_fire,
             stage: InterventionStage::None,
             nudge_delivered: false,
+            last_success: None,
+            success_streak: 0,
         }
     }
 
@@ -155,12 +167,29 @@ impl ToolLoopDetector {
             return LoopDetectorAction::None;
         }
 
-        // Success anywhere resets everything.
         if !fp.is_failure() {
-            self.reset();
-            return LoopDetectorAction::None;
+            let repeat = self.last_success.as_ref().is_some_and(|last| {
+                last.tool_name == fp.tool_name && last.args_hash == fp.args_hash
+            });
+            self.success_streak = if repeat {
+                self.success_streak + 1
+            } else {
+                1
+            };
+            self.last_success = Some(fp.clone());
+            if self.success_streak < SUCCESS_REPEAT_THRESHOLD {
+                // A new (or not yet repeated) success resets everything.
+                self.reset();
+                return LoopDetectorAction::None;
+            }
+            // Keep the repeated call in the window for the intervention text.
+            self.recent.clear();
+            self.recent.push_back(fp);
+            return self.escalate();
         }
 
+        self.success_streak = 0;
+        self.last_success = None;
         self.recent.push_back(fp);
         while self.recent.len() > self.window {
             self.recent.pop_front();
@@ -176,6 +205,10 @@ impl ToolLoopDetector {
             return LoopDetectorAction::None;
         }
 
+        self.escalate()
+    }
+
+    fn escalate(&mut self) -> LoopDetectorAction {
         match self.stage {
             InterventionStage::None => {
                 self.stage = InterventionStage::Nudged;
@@ -207,6 +240,8 @@ impl ToolLoopDetector {
             self.stage = InterventionStage::None;
             self.recent.clear();
             self.nudge_delivered = false;
+            self.last_success = None;
+            self.success_streak = 0;
         }
     }
 
@@ -290,13 +325,20 @@ pub fn format_intervention_message(window: &[ToolCallFingerprint]) -> String {
     msg.push_str(" tool calls were:\n");
     for (i, fp) in window.iter().enumerate() {
         let args_str = serde_json::to_string(&fp.arguments).unwrap_or_else(|_| "{}".to_string());
-        let err = fp.error_text.as_deref().unwrap_or("(no error)");
+        let outcome = if fp.is_failure() {
+            format!(
+                "error: {}",
+                fp.error_text.as_deref().unwrap_or("(no error)")
+            )
+        } else {
+            "ok".to_string()
+        };
         msg.push_str(&format!(
-            "  {}. {}({}) → error: {}\n",
+            "  {}. {}({}) → {}\n",
             i + 1,
             fp.tool_name,
             args_str,
-            err
+            outcome
         ));
     }
 
@@ -305,6 +347,18 @@ pub fn format_intervention_message(window: &[ToolCallFingerprint]) -> String {
         .map(|fp| fp.tool_name.as_str())
         .unwrap_or("this tool");
 
+    if window.iter().all(|fp| !fp.is_failure()) {
+        msg.push_str(&format!(
+            "\nYou have made this exact call {SUCCESS_REPEAT_THRESHOLD}+ times in a row and it \
+             succeeded every time. Repeating it returns the same result and changes nothing.\n\n\
+             On your next turn:\n"
+        ));
+        msg.push_str("1. Do NOT repeat this call.\n");
+        msg.push_str("2. Use the result you already have.\n");
+        msg.push_str("3. If the task needs a different action, take that one; otherwise respond to the user in plain text.\n");
+        msg.push_str("\nThe user is waiting for a text response.");
+        return msg;
+    }
     msg.push_str(
         "\nThese are identical failed invocations. Retrying with the same arguments will fail \
          again.\n\nOn your next turn:\n",
@@ -339,7 +393,18 @@ fn hash_value(v: &Value) -> u64 {
     // deterministically within a single `to_string` call only if the input was
     // a Map<String,_>. serde_json::Map preserves insertion order, so to get a
     // stable fingerprint we walk the value recursively.
-    let canonical = canonicalize(v);
+    // Runner-injected metadata (`_session_key`, `_trace_correlation_key`, …)
+    // is not part of what the model asked for, so it must not make two
+    // otherwise identical calls look different.
+    let canonical = match v {
+        Value::Object(map) => canonicalize(&Value::Object(
+            map.iter()
+                .filter(|(k, _)| !k.starts_with('_'))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )),
+        other => canonicalize(other),
+    };
     let mut hasher = DefaultHasher::new();
     canonical.hash(&mut hasher);
     hasher.finish()
@@ -383,6 +448,55 @@ mod tests {
             Some(_) => ToolCallFingerprint::failure(tool, &args, err),
             None => ToolCallFingerprint::success(tool, &args),
         }
+    }
+
+    #[test]
+    fn repeated_identical_successes_escalate() {
+        let mut d = ToolLoopDetector::new(2, true);
+        let call = || {
+            fp(
+                "update_event",
+                json!({"event_id": "e1", "start": "16:20"}),
+                None,
+            )
+        };
+        assert_eq!(d.record(call()), LoopDetectorAction::None);
+        assert_eq!(d.record(call()), LoopDetectorAction::None);
+        assert_eq!(d.record(call()), LoopDetectorAction::InjectNudge);
+        assert_eq!(d.consume_pending_action(), LoopDetectorAction::InjectNudge);
+        assert_eq!(d.record(call()), LoopDetectorAction::StripTools);
+        let msg = format_intervention_message(&d.window_snapshot());
+        assert!(msg.contains("succeeded every time"), "{msg}");
+        assert!(msg.contains("→ ok"), "{msg}");
+    }
+
+    #[test]
+    fn successes_with_different_args_do_not_escalate() {
+        let mut d = ToolLoopDetector::new(2, true);
+        for day in 16..26 {
+            let args = json!({"date": format!("2026-11-{day}")});
+            assert_eq!(
+                d.record(fp("get_daily_briefing", args, None)),
+                LoopDetectorAction::None
+            );
+        }
+    }
+
+    #[test]
+    fn injected_metadata_keys_do_not_break_repeat_detection() {
+        let mut d = ToolLoopDetector::new(2, true);
+        for i in 0..2 {
+            let args = json!({"_trace_correlation_key": format!("t{i}"), "calendar_id": null});
+            assert_eq!(
+                d.record(fp("list_calendars", args, None)),
+                LoopDetectorAction::None
+            );
+        }
+        let args = json!({"_trace_correlation_key": "t9", "calendar_id": null});
+        assert_eq!(
+            d.record(fp("list_calendars", args, None)),
+            LoopDetectorAction::InjectNudge
+        );
     }
 
     #[test]
