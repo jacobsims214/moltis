@@ -30,7 +30,12 @@ pub(super) fn build_schema_map() -> KnownKeys {
         ]))
     };
 
-    let model_override = || Struct(HashMap::from([("context_window", Leaf)]));
+    let model_override = || {
+        Struct(HashMap::from([
+            ("context_window", Leaf),
+            ("max_output_tokens", Leaf),
+        ]))
+    };
 
     let provider_entry = || {
         Struct(HashMap::from([
@@ -50,6 +55,7 @@ pub(super) fn build_schema_map() -> KnownKeys {
             ("model_overrides", Map(Box::new(model_override()))),
             ("idle_timeout_secs", Leaf),
             ("probe_timeout_secs", Leaf),
+            ("max_output_tokens", Leaf),
         ]))
     };
 

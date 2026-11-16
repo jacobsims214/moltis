@@ -332,6 +332,7 @@ impl OpenAiProvider {
         super::core::apply_openai_chat_tool_choice(&mut body, options)?;
 
         self.apply_reasoning_effort_chat(&mut body);
+        self.apply_output_cap_chat(&mut body);
 
         debug!(
             model = %self.model,

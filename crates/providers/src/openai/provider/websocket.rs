@@ -139,6 +139,7 @@ impl OpenAiProvider {
             }
 
             self.apply_reasoning_effort_responses(&mut response_payload);
+            self.apply_output_cap_responses(&mut response_payload);
 
             let create_event = serde_json::json!({
                 "type": "response.create",

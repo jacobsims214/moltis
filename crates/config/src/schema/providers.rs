@@ -82,6 +82,16 @@ pub struct ModelOverride {
     /// take precedence over global overrides (`[models.<id>]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
+
+    /// Cap the number of tokens the model may generate per response turn.
+    ///
+    /// Sent as `max_tokens` (Chat Completions) or `max_output_tokens`
+    /// (Responses API) on OpenAI-compatible requests. Only honoured in the
+    /// provider-scoped form (`[providers.<name>.model_overrides.<id>]`),
+    /// where it takes precedence over the provider-level
+    /// `max_output_tokens`. `None` (default) sends no cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
 }
 
 /// LLM provider configuration.
@@ -299,6 +309,18 @@ pub struct ProviderEntry {
     /// `None` (default) uses the built-in 30-second timeout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe_timeout_secs: Option<u64>,
+
+    /// Maximum tokens the model may generate per response turn.
+    ///
+    /// Sent as `max_tokens` on Chat Completions requests (or
+    /// `max_output_tokens` on the Responses API) for OpenAI-compatible
+    /// providers, including `custom-*` endpoints such as vLLM. Without a cap
+    /// a self-hosted server may generate up to its whole remaining context,
+    /// which can take minutes. A per-model value in `model_overrides` wins.
+    ///
+    /// `None` (default) sends no cap, leaving the server's default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u32>,
 }
 
 impl std::fmt::Debug for ProviderEntry {
@@ -318,6 +340,7 @@ impl std::fmt::Debug for ProviderEntry {
             .field("policy", &self.policy)
             .field("model_overrides", &self.model_overrides)
             .field("probe_timeout_secs", &self.probe_timeout_secs)
+            .field("max_output_tokens", &self.max_output_tokens)
             .finish()
     }
 }
@@ -340,6 +363,7 @@ impl Default for ProviderEntry {
             model_overrides: HashMap::new(),
             idle_timeout_secs: None,
             probe_timeout_secs: None,
+            max_output_tokens: None,
         }
     }
 }

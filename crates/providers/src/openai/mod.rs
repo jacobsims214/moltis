@@ -138,4 +138,8 @@ pub struct OpenAiProvider {
     /// Optional override for the completion-based probe timeout (seconds).
     /// `None` uses the trait default (30s).
     probe_timeout_secs: Option<u64>,
+    /// Optional per-response output-token cap from
+    /// `[providers.<name>].max_output_tokens` (or a model override).
+    /// `None` sends no cap.
+    max_output_tokens: Option<u32>,
 }

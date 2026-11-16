@@ -173,6 +173,7 @@ impl OpenAiProvider {
             }
 
             self.apply_reasoning_effort_chat(&mut body);
+            self.apply_output_cap_chat(&mut body);
 
             debug!(
                 model = %self.model,
