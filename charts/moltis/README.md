@@ -79,6 +79,45 @@ their startup probes, so the MCP connections never race the servers.
 - Resources: SearXNG ~200 MiB, its MCP ~64 MiB, Playwright 0.4–2 GiB while
   browsing; per instance.
 
+## Run limits (why a turn can't run for 10 minutes)
+
+```yaml
+defaults:
+  tools:
+    agentMaxIterations: 10    # effective 30 iterations (lazy mode multiplies by 3)
+    agentTimeoutSecs: 300     # wall clock; 0 = no timeout
+```
+
+With no chart value, instances inherited the engine defaults: 25 iterations
+(**75 in practice**, see below) and 600 s. A war-game round hit both — one turn
+spent ~590 s on a degenerate `memory_search` tail after the answers were
+already gathered, and another spent 580 s on a *single* LLM stream.
+
+- **`agentMaxIterations` is a base, not the effective limit.** Moltis
+  multiplies it by 3 when `tools.registryMode` is `lazy`
+  (`crates/agents/src/runner/streaming.rs:112`, `non_streaming.rs:124`), which
+  this chart defaults to. The startup log prints the base
+  (`resolved agent runtime limits max_iterations = 10`), so a run that dies at
+  iteration 30 looks like a bug. It isn't.
+- **`agentTimeoutSecs` is the only bound on a slow stream.** The iteration cap
+  cannot catch a run that is slow because one completion took minutes.
+- **Both are exported as `MOLTIS_TOOLS__AGENT_*` env vars as well as rendered
+  into `[tools]`.** Moltis applies `MOLTIS_*` overrides *after* loading the
+  config file, so the env var also binds an instance whose `moltis.toml` was
+  seeded by an earlier chart version (with `configOverwrite: false`, which is
+  the default, a rendered-only value never reaches an existing volume).
+- **Hitting either limit costs the answer.** The iteration limit is
+  recoverable — the UI offers "continue" — while the timeout returns
+  `Timed out` and no text, so raise `agentTimeoutSecs` (or set `0`) if real
+  turns start hitting it. 300 s is a deliberate ceiling: an answer that lands
+  at 590 s has already lost its reader.
+- Either value can be set per instance under `instances.<name>.tools`.
+- **These two are enforced, not suggested:** because the env var is applied
+  after the config file loads, changing them in the Moltis UI does not stick —
+  the chart value wins at every start. That is deliberate for a cap whose whole
+  purpose is to be absent from the model's decision loop, but it means an
+  operator who needs a different limit changes it here and redeploys.
+
 ## Locking it down
 
 ```yaml

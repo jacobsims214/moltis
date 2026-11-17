@@ -294,6 +294,24 @@ spec:
                   name: {{ $c.householdHub.tokenSecret.name }}
                   key: {{ $c.householdHub.tokenSecret.key }}
             {{- end }}
+            # Run limits as env overrides, not only as rendered TOML: moltis
+            # applies MOLTIS_* after loading the config file
+            # (crates/config/src/loader/config_io.rs:789-905), so these bind an
+            # instance whose moltis.toml was seeded by an earlier chart
+            # version. Without them a rendered-only cap would never reach a
+            # running instance (configOverwrite only seeds an empty volume).
+            # Skipped when `env` already names the same var, so an explicit
+            # entry never renders twice.
+            {{- $envNames := list }}
+            {{- range $c.env }}{{ $envNames = append $envNames .name }}{{ end }}
+            {{- if not (has "MOLTIS_TOOLS__AGENT_MAX_ITERATIONS" $envNames) }}
+            - name: MOLTIS_TOOLS__AGENT_MAX_ITERATIONS
+              value: {{ int $c.tools.agentMaxIterations | quote }}
+            {{- end }}
+            {{- if not (has "MOLTIS_TOOLS__AGENT_TIMEOUT_SECS" $envNames) }}
+            - name: MOLTIS_TOOLS__AGENT_TIMEOUT_SECS
+              value: {{ int $c.tools.agentTimeoutSecs | quote }}
+            {{- end }}
             {{- with $c.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
