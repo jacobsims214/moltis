@@ -29,7 +29,7 @@ fn job_schema() -> Value {
             },
             "payload": {
                 "type": ["object", "string"],
-                "description": "Use {kind:'systemEvent', text} for main-session reminders or {kind:'agentTurn', message}. In a messaging conversation, deliver_to_current_chat:true routes the agentTurn back to that exact conversation without copying identifiers.",
+                "description": "Use {kind:'systemEvent', text} to continue the main conversation (no delivery, no notification) or {kind:'agentTurn', message} to run work; only an agentTurn with deliver, channel and to (or deliver_to_current_chat in a messaging conversation) reaches a chat or phone. A job with no delivery fields records its output in run history only.",
                 "properties": {
                     "kind": { "type": "string", "enum": ["systemEvent", "agentTurn"] },
                     "text": { "type": "string" },

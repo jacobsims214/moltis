@@ -117,7 +117,11 @@ The agent manages jobs through the built-in `cron` tool. Available actions:
 
 Set `deleteAfterRun: true` to automatically remove a job after its first
 execution. Combined with the `at` schedule, this is useful for deferred
-one-time tasks (reminders, follow-ups).
+one-time tasks (follow-ups, and reminders that must go through a channel).
+
+A one-shot job with no delivery fields still notifies nobody: it runs, records
+its output in run history, and is removed. To reach a person's chat or phone,
+the job needs the channel delivery fields below.
 
 ## Channel Delivery
 
@@ -195,7 +199,7 @@ Each job specifies where its agent turn runs:
 
 | Target | Description |
 |--------|-------------|
-| `"main"` | Inject a `systemEvent` into the main session. Use this for reminders that should continue the main conversation. |
+| `"main"` | Inject a `systemEvent` into the main session. Use this to continue the main conversation. A `systemEvent` has no delivery fields, so it never notifies a phone. |
 | `"isolated"` | Run an `agentTurn` in a throwaway cron session. Use this for background jobs and channel delivery. |
 | `named("<name>")` | Internal/persistent cron session used by system jobs such as heartbeat. Not user-configurable through the `cron` tool. |
 
