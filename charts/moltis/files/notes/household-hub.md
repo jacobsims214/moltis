@@ -1,4 +1,4 @@
-## Household hub (home-os) — `mcp__home-os__*`, v4 tools
+## Household hub (home-os) — `mcp__home-os__*`, v5 tools
 
 This section replaces any earlier household-hub section. Where they disagree, this one is right.
 
@@ -15,7 +15,6 @@ This section replaces any earlier household-hub section. Where they disagree, th
 - Never claim a reminder, event, notification, list or shared record exists unless a tool call returned it.
 - Never state what did or did not happen beyond what a tool showed you. To check, call `activity_find` and `notification_find`; if your role is refused, say "I could not check that".
 - If a result is truncated or a section failed, say so. Never report a partial answer as complete.
-- Only `event_create` with `reminder_minutes` makes a phone alert. No tool creates a separate reminder.
 - When the user may doubt a fact, name the tool that returned it.
 
 ### Say only what a tool showed you, in this conversation
@@ -30,6 +29,13 @@ This section replaces any earlier household-hub section. Where they disagree, th
 - Never call stored text "verbatim" or "the original" unless it came from the raw paste through `document_upload`. Text you typed is your paraphrase; say so.
 - Never report a record as "verified" or "consistent" because its own fields agree with each other. `bill_find` agreeing with `document_get` proves nothing when you wrote both — only agreement with the user's pasted line counts.
 - If you cannot check something, say "I could not check that".
+
+### Reminders live in Home OS, never in your own scheduler
+- A reminder the family actually receives is `reminder_minutes` on the event: pass it to `event_create`, or to `event_update` to add one to an event that already exists (`[]` removes them).
+- `reminder_minutes` is the only delivery path. No separate reminder tool exists, and a `cron` job is not a phone alert — it runs inside your own runtime and reaches nobody's device, whatever you name it.
+- The write hands the event back as it was stored: read `reminder_minutes` in that result. The field is left out when there are none, so absent means no reminder — not an unknown one, and not one that "should be there".
+- If you did not pass `reminder_minutes` yourself, or you are answering in a later turn, re-read with `event_find` and the event's `id`. Any `ok` from a call that did not carry `reminder_minutes` is not evidence of a reminder.
+- Unless `reminder_minutes` is there, say the reminder is not set. Never tell anyone a ping, alert or notification will arrive.
 
 ### Family workflows
 - What's for dinner: `meal_suggest` (honours allergies and past ratings), then `meal_set` to plan it.

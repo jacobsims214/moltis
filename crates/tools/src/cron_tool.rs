@@ -352,11 +352,13 @@ fn normalize_payload_value(payload: &mut Value, session_target_hint: Option<&str
                 obj.insert("kind".to_string(), Value::String(inferred.to_string()));
             }
 
+            // Owned so the arms below can mutate `obj` while naming the kind.
             let kind = obj
                 .get("kind")
                 .and_then(Value::as_str)
-                .ok_or_else(|| Error::message("payload.kind must be a string"))?;
-            match kind {
+                .ok_or_else(|| Error::message("payload.kind must be a string"))?
+                .to_string();
+            match kind.as_str() {
                 "systemEvent" => {
                     if !obj.contains_key("text")
                         && let Some(message) = obj.get("message").cloned()
@@ -391,12 +393,78 @@ fn normalize_payload_value(payload: &mut Value, session_target_hint: Option<&str
                 },
                 _ => unreachable!("payload kind normalized above"),
             }
+            reject_ineffective_delivery(&kind, obj)?;
             Ok(())
         },
         _ => Err(Error::message(
             "payload must be an object or message string",
         )),
     }
+}
+
+/// Delivery fields the caller set, that this payload shape cannot honour.
+///
+/// Serde drops unknown fields, so a delivery instruction attached to a shape
+/// without a home for it used to disappear silently while the tool still
+/// returned `ok`. An agent read that `ok` as "the reminder is set" and told the
+/// user it would be pinged when nothing was ever scheduled to reach a device
+/// (war-game R1 G3, #4952). Naming the fields is what makes the refusal
+/// actionable: the model can fix the call instead of guessing.
+fn ineffective_delivery_fields(kind: &str, payload: &Map<String, Value>) -> Vec<&'static str> {
+    // `deliver` is the switch; `channel`/`to` are where it goes. A destination
+    // is only meaningful with the switch on.
+    let wants_delivery = payload.get("deliver").and_then(Value::as_bool) == Some(true);
+    let has_destination = ["channel", "to"].into_iter().any(|field| {
+        payload
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+    });
+
+    match kind {
+        // `CronPayload::SystemEvent { text }` has no delivery fields at all.
+        "systemEvent" if wants_delivery || has_destination => {
+            ["deliver", "channel", "to", "deliver_to_current_chat"]
+                .into_iter()
+                .filter(|field| {
+                    payload.get(*field).is_some_and(|value| match value {
+                        Value::Bool(set) => *set,
+                        Value::String(text) => !text.trim().is_empty(),
+                        Value::Null => false,
+                        _ => true,
+                    })
+                })
+                .collect()
+        },
+        // `CronPayload::AgentTurn` keeps `deliver` but drops `channel`/`to`
+        // unless the run is told to deliver.
+        "agentTurn" if !wants_delivery && has_destination => vec!["channel", "to"],
+        _ => Vec::new(),
+    }
+}
+
+fn reject_ineffective_delivery(kind: &str, payload: &Map<String, Value>) -> Result<()> {
+    let fields = ineffective_delivery_fields(kind, payload);
+    if fields.is_empty() {
+        return Ok(());
+    }
+    let named = fields.join(", ");
+    let remedy = if kind == "systemEvent" {
+        "A systemEvent is injected into the main conversation; it has no delivery \
+         destination and cannot reach a phone. To deliver output to a chat, use \
+         sessionTarget \"isolated\" with payload.kind \"agentTurn\", payload.deliver \
+         true plus payload.channel and payload.to (or deliver_to_current_chat from \
+         inside a messaging conversation)."
+    } else {
+        "payload.deliver must be true for payload.channel and payload.to to be used; \
+         with deliver false the run's output stays in run history."
+    };
+    Err(Error::message(format!(
+        "payload fields [{named}] cannot take effect on a `{kind}` payload, so this job \
+         would report success while nothing is delivered. {remedy} To schedule work that \
+         does not deliver anything, remove these fields."
+    )))
 }
 
 fn normalize_wake_mode(raw: &str) -> Option<&'static str> {
@@ -662,15 +730,25 @@ impl AgentTool for CronTool {
     }
 
     fn description(&self) -> &str {
-        "Manage scheduled tasks (reminders, recurring jobs, cron schedules).\n\
+        "Manage scheduled tasks (recurring jobs, deferred agent turns, cron schedules).\n\
          \n\
-         For reminders and recurring tasks that should produce a response in the \
-         main conversation (e.g. \"tell me a joke every day at 9am\"), use:\n\
+         This tool schedules work inside moltis. It does not alert a user's phone \
+         unless the job delivers to a channel account, so do not call it to \
+         \"remind me\" about something the user tracks in another system: put the \
+         reminder on that system's own record instead. If no such record can hold \
+         a reminder, say so; never tell the user a reminder is set because a cron \
+         job was created.\n\
+         \n\
+         To continue a conversation inside the main session (e.g. \"ask me how the \
+         day went at 9am\"), use:\n\
          - sessionTarget: \"main\"\n\
          - payload.kind: \"systemEvent\"\n\
          - payload.text: a message that will be injected as if the user typed it \
            (the agent will then process it and respond). Write the text as an \
-           instruction to yourself, e.g. \"Tell me a funny joke.\"\n\
+           instruction to yourself, e.g. \"Ask how the day went.\"\n\
+         A systemEvent reaches only the main conversation. It has no delivery \
+         fields and will not notify a phone; putting deliver, channel or to on a \
+         systemEvent is rejected.\n\
          \n\
          For isolated background tasks (no main session interaction), use:\n\
          - sessionTarget: \"isolated\"\n\
@@ -689,7 +767,13 @@ impl AgentTool for CronTool {
            bot username like \"my_telegram_bot\")\n\
          - payload.to: the recipient chat ID (e.g. \"123456789\")\n\
          All three fields are required together. deliver=true without channel \
-         and to will be rejected. Delivery only works with agentTurn payloads.\n\
+         and to will be rejected, and so will channel and to without deliver=true, \
+         because the destination would be silently ignored. Delivery only works \
+         with agentTurn payloads.\n\
+         \n\
+         A job with no delivery fields runs and records its output in run history \
+         only: nobody is notified. That is what an undelivered \"reminder\" looks \
+         like, so check before describing a job as something the user will see.\n\
          \n\
          Important constraints:\n\
          - sessionTarget \"main\" requires payload kind \"systemEvent\"\n\

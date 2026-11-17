@@ -690,3 +690,212 @@ async fn test_stringified_job_with_invalid_json_is_rejected() {
         .await;
     assert!(result.is_err());
 }
+
+// ── delivery that cannot take effect must fail closed (#4952) ───────────────
+//
+// War-game R1 G3: `deliver_to_current_chat: true` correctly errored with
+// "current channel has no delivery account"; the agent retried with a
+// `systemEvent` job and got `ok`. `CronPayload::SystemEvent` has no `deliver`,
+// `channel` or `to` fields, so serde *silently discarded* the delivery
+// instruction: the job was stored, reported success, and nothing ever reached
+// a device. The agent then told the parent "it'll ping you".
+
+#[tokio::test]
+async fn test_add_rejects_system_event_carrying_delivery() {
+    let tool = make_tool();
+    for extra in [
+        json!({ "deliver": true }),
+        json!({ "channel": "bot-main" }),
+        json!({ "to": "123456" }),
+        json!({ "deliver": true, "channel": "bot-main", "to": "123456" }),
+    ] {
+        let mut payload = json!({ "kind": "systemEvent", "text": "Liam soccer at 5" });
+        for (k, v) in extra.as_object().unwrap() {
+            payload[k] = v.clone();
+        }
+        let result = tool
+            .execute(json!({
+                "action": "add",
+                "job": {
+                    "name": "soccer reminder",
+                    "schedule": { "kind": "at", "delay_ms": "1h" },
+                    "payload": payload,
+                    "sessionTarget": "main",
+                    "deleteAfterRun": true
+                }
+            }))
+            .await;
+
+        let error = result.expect_err(&format!(
+            "systemEvent silently dropped {extra} and returned ok"
+        ));
+        let message = error.to_string();
+        assert!(
+            message.contains("systemEvent"),
+            "error should name the payload kind the caller used: {message}"
+        );
+        assert!(
+            message.contains("agentTurn"),
+            "error should name the shape that can deliver: {message}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_add_rejects_destination_without_deliver() {
+    let tool = make_tool();
+    for extra in [
+        json!({ "channel": "bot-main", "to": "123456" }),
+        json!({ "channel": "bot-main" }),
+        json!({ "to": "123456" }),
+        json!({ "deliver": false, "channel": "bot-main", "to": "123456" }),
+    ] {
+        let mut payload = json!({ "kind": "agentTurn", "message": "post an update" });
+        for (k, v) in extra.as_object().unwrap() {
+            payload[k] = v.clone();
+        }
+        let result = tool
+            .execute(json!({
+                "action": "add",
+                "job": {
+                    "name": "delivered run",
+                    "schedule": { "kind": "every", "every_ms": 60000 },
+                    "payload": payload,
+                    "sessionTarget": "isolated"
+                }
+            }))
+            .await;
+
+        let error = result.expect_err(&format!(
+            "agentTurn with a destination but deliver != true dropped {extra} and returned ok"
+        ));
+        assert!(
+            error.to_string().contains("deliver"),
+            "error should name the missing flag: {error}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_add_still_accepts_delivery_that_can_take_effect() {
+    let tool = make_tool();
+
+    // Isolated agentTurn, delivery fully specified: the working path.
+    let delivered = tool
+        .execute(json!({
+            "action": "add",
+            "job": {
+                "name": "delivered run",
+                "schedule": { "kind": "every", "every_ms": 60000 },
+                "payload": {
+                    "kind": "agentTurn",
+                    "message": "post an update",
+                    "deliver": true,
+                    "channel": "bot-main",
+                    "to": "123456"
+                },
+                "sessionTarget": "isolated"
+            }
+        }))
+        .await
+        .unwrap();
+    assert_eq!(delivered["payload"]["deliver"], true);
+    assert_eq!(delivered["payload"]["channel"], "bot-main");
+
+    // Background agentTurn with no delivery at all is legitimate: output goes
+    // to run history only. It must keep working.
+    let background = tool
+        .execute(json!({
+            "action": "add",
+            "job": {
+                "name": "background work",
+                "schedule": { "kind": "every", "every_ms": 60000 },
+                "payload": { "kind": "agentTurn", "message": "rebuild the index" },
+                "sessionTarget": "isolated"
+            }
+        }))
+        .await
+        .unwrap();
+    assert_eq!(background["payload"]["deliver"], false);
+
+    // A systemEvent with no delivery claim is legitimate moltis: it injects
+    // into the main session. Only the claim is rejected, not the job.
+    let in_session = tool
+        .execute(json!({
+            "action": "add",
+            "job": {
+                "name": "continue the conversation",
+                "schedule": { "kind": "every", "every_ms": 60000 },
+                "payload": { "kind": "systemEvent", "text": "ask how the day went" },
+                "sessionTarget": "main"
+            }
+        }))
+        .await
+        .unwrap();
+    assert_eq!(in_session["payload"]["kind"], "systemEvent");
+}
+
+#[tokio::test]
+async fn test_update_rejects_system_event_carrying_delivery() {
+    let tool = make_tool();
+    let add = tool
+        .execute(json!({
+            "action": "add",
+            "job": {
+                "name": "toggle to a lying shape",
+                "schedule": { "kind": "every", "every_ms": 60000 },
+                "payload": { "kind": "agentTurn", "message": "run task" },
+                "sessionTarget": "isolated"
+            }
+        }))
+        .await
+        .unwrap();
+    let id = add["id"].as_str().unwrap();
+
+    let result = tool
+        .execute(json!({
+            "action": "update",
+            "id": id,
+            "patch": {
+                "payload": {
+                    "kind": "systemEvent",
+                    "text": "Liam soccer at 5",
+                    "deliver": true
+                },
+                "sessionTarget": "main"
+            }
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "update accepted a systemEvent carrying deliver=true"
+    );
+}
+
+#[test]
+fn test_description_does_not_recommend_cron_for_reminders() {
+    // #4952: the description used to open with "For reminders ... use
+    // sessionTarget: main + systemEvent", the exact shape that stores a job
+    // which never notifies anyone. A model reading its own tool list was being
+    // taught the failing path, so pin the wording.
+    let tool = make_tool();
+    let description = tool.description();
+
+    assert!(
+        !description.contains("For reminders"),
+        "the cron description must not present itself as the reminder path: {description}"
+    );
+    assert!(
+        description.contains("does not alert a user's phone"),
+        "the description must say a cron job is not a phone alert: {description}"
+    );
+    assert!(
+        description.contains("never tell the user a reminder is set because a cron job was created"),
+        "the description must forbid the R1 G3 claim: {description}"
+    );
+    assert!(
+        description.contains("A systemEvent reaches only the main conversation"),
+        "the description must scope systemEvent: {description}"
+    );
+}
