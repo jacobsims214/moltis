@@ -81,6 +81,14 @@ enabled = false
 
 [tools]
 registry_mode = {{ $c.tools.registryMode | quote }}
+{{- if lt (int $c.tools.agentMaxIterations) 1 }}
+{{- fail (printf "tools.agentMaxIterations must be at least 1 (got %v); moltis rejects 0 (crates/config/src/validate/semantic.rs)" $c.tools.agentMaxIterations) }}
+{{- end }}
+{{- if lt (int $c.tools.agentTimeoutSecs) 0 }}
+{{- fail (printf "tools.agentTimeoutSecs must be 0 (no timeout) or greater (got %v)" $c.tools.agentTimeoutSecs) }}
+{{- end }}
+agent_max_iterations = {{ int $c.tools.agentMaxIterations }}
+agent_timeout_secs = {{ int $c.tools.agentTimeoutSecs }}
 {{- $deny := $c.tools.deny | default list }}
 {{- if $c.webTools.searxng.enabled }}{{ $deny = append $deny "web_search" }}{{ end }}
 {{- if $c.webTools.playwright.enabled }}{{ $deny = append $deny "browser" }}{{ end }}
