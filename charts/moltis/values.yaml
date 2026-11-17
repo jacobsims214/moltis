@@ -74,6 +74,37 @@ defaults:
   # tool instead and activates tools on demand (~8.5k tokens, ~13 s).
   tools:
     registryMode: lazy        # lazy | full
+
+    # Run limits (AMP #4950). Both are rendered into [tools] AND exported as
+    # MOLTIS_TOOLS__AGENT_* env vars, because env overrides are applied after
+    # the config file loads — that is what makes them reach an instance whose
+    # moltis.toml already exists (configOverwrite=false only seeds an empty
+    # volume, so a rendered-only value never lands on a running instance).
+
+    # Base agent-loop iteration limit; must be >= 1 (the engine rejects 0).
+    # CAUTION: moltis multiplies this by 3 when registryMode is "lazy"
+    # (crates/agents/src/runner/streaming.rs:112, non_streaming.rs:124), so
+    # the effective limit is 3x this value in lazy mode. The startup log
+    # prints the *base* ("resolved agent runtime limits ... max_iterations"),
+    # which is why a run that stops at iteration 30 logs max_iterations = 10.
+    # 10 here = 30 actual iterations in lazy mode: comfortably above the
+    # 3-15 tool calls a real family turn used in war-game R1, far below the
+    # 75 the engine default (25) silently allowed.
+    agentMaxIterations: 10
+
+    # Wall-clock cap on one agent run in seconds; 0 = no timeout.
+    # This is the only bound that catches a single slow LLM stream (war-game
+    # R1 Jacob T12: 580 s over just 5 tool calls) and the degenerate search
+    # tail (Amber T13: ~590 s). It is NOT multiplied like the iteration cap.
+    #
+    # Trade-off, deliberate: a run that hits this cap returns "Timed out" and
+    # NO answer (crates/chat/src/chat_error.rs), whereas the iteration limit
+    # at least offers "continue". 300 s is chosen because R1 measured the
+    # player's own patience at 300 s — an answer at 590 s reached nobody. The
+    # longest *legitimate* R1 turn was 231 s, so headroom is thin: raise this
+    # (or set 0) if real family turns start timing out.
+    agentTimeoutSecs: 300
+
     # Tools no family instance can use here (glob patterns).
     deny:
       - "teams_*"
