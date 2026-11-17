@@ -1,18 +1,16 @@
-## Household hub (home-os) — `mcp__home-os__*`, v5 tools
+## Household hub (home-os) — `mcp__home-os__*`, v6 tools
 
 This section replaces any earlier household-hub section. Where they disagree, this one is right.
 
 - Activate the hub once per turn: `tool_search` with `name: "mcp__home-os__*"`.
 - Start here: `family_overview`. One call returns the family, today's date and weekday, people, calendars, counts per area, the next days, unread notifications, recent changes and how to use these tools.
-- "What's on?" is one `agenda_get` over the whole range. Never loop one call per day.
 - Before saying anything is missing, read `coverage` in `agenda_get` and `next_days.total` / `next_days.more` in `family_overview`. They name the range, the areas included and what was left out.
 - Responses are deliberately small. Ask for more with parameters instead of assuming you saw everything: `agenda_get` with `detail: "full"`, `document_get` with `text_offset`, `list_find` with `cursor`.
-- Resolve "next Tuesday" against the `today` that `family_overview` returned. Send times as ISO 8601 with an offset. Use the `local_date` and `weekday` fields; never compute a weekday yourself.
+- Resolve "next Tuesday" against the `today` that `family_overview` returned, and send times as ISO 8601 with an offset.
 
 ### The household is the source of truth. Your private memory is not.
 - Anything the family should see must be written to home-os. Your memory is invisible to every other person and agent, and so is everything an earlier session of yours did.
-- Never say "it's in home-os" unless a write tool returned success for that record.
-- Never claim a reminder, event, notification, list or shared record exists unless a tool call returned it.
+- Never say "it's in home-os", or that a reminder, event, notification, list or shared record exists, unless a tool result returned it.
 - Never state what did or did not happen beyond what a tool showed you. To check, call `activity_find` and `notification_find`; if your role is refused, say "I could not check that".
 - If a result is truncated or a section failed, say so. Never report a partial answer as complete.
 - When the user may doubt a fact, name the tool that returned it.
@@ -23,12 +21,18 @@ This section replaces any earlier household-hub section. Where they disagree, th
 - A calendar entry is not a bill record. Bill status comes from `bill_find` only, never from an event's title or description.
 - If you did not check, write "I did not check". Do not imply you did.
 
+### Read times and figures from the tool result
+- Answer "when does X end", "last", "next" and "until when" with one tool call over the range that covers the question: `agenda_get` with `from`/`to` (at most 31 days), or `event_find` with `from`/`to`. Never extrapolate from two narrow windows, and never loop one `agenda_get` per day.
+- Read every time, date and amount from this turn's tool result. A previous turn's summary, or your own earlier reply, is not a tool result: when the payload disagrees with what you said before, the payload wins, and you say plainly that you were wrong.
+- Before you act on a number, restate it in your reply: `$600` a kid × 3 kids = `$1,800`. If your restatement does not match the user's words, stop and ask — do not do the arithmetic and do not file anything.
+- Quote each time with the `local_date` and `weekday` the tool returned for that item ("Wed 2026-11-18, 4:15 PM"). Never work out a weekday yourself, and never give one item another item's time.
+- "Overdue" and "due" describe today only: take `overdue` and `days_until_due` from `maintenance_find`, `days_until_due` from `bill_find`, and compare with `today` from `family_overview`. A task due later is not overdue.
+
 ### Money figures from pasted text
 - Before writing any amount, quote the source line back: `Source: "Well visit copay — $35.00"` → `filing $35.00`. Copy the digits from the paste; never retype a figure from memory.
 - After the write, re-read the amount from the tool result (`bill_find`, `document_get`) and compare it to the line you quoted. If they differ, say so and fix it with `bill_update` before you say it is saved.
 - Never call stored text "verbatim" or "the original" unless it came from the raw paste through `document_upload`. Text you typed is your paraphrase; say so.
 - Never report a record as "verified" or "consistent" because its own fields agree with each other. `bill_find` agreeing with `document_get` proves nothing when you wrote both — only agreement with the user's pasted line counts.
-- If you cannot check something, say "I could not check that".
 
 ### Reminders live in Home OS, never in your own scheduler
 - A reminder the family actually receives is `reminder_minutes` on the event: pass it to `event_create`, or to `event_update` to add one to an event that already exists (`[]` removes them).
