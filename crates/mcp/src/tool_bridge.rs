@@ -8,12 +8,17 @@ use {
     crate::{
         client_slot::ClientSlot,
         error::{Error, Result},
+        manager::McpManager,
+        session_pool::UNSCOPED_SESSION,
         traits::McpClientTrait,
         types::{McpToolDef, ToolContent},
     },
     moltis_config::schema::McpServerId,
     tokio::sync::RwLock,
 };
+
+/// The tool-context key the agent runner merges into every tool call.
+pub(crate) const SESSION_KEY_ARG: &str = "_session_key";
 
 /// Recursively strip null values from nested objects and arrays.
 ///
@@ -82,6 +87,10 @@ fn drop_placeholder_args(
 }
 
 /// An `AgentTool` implementation that delegates to an MCP server via `McpClient`.
+///
+/// Cheap to clone: every field is a handle or a small owned value, so a test or
+/// a caller can hold one bridge per concurrent turn.
+#[derive(Clone)]
 pub struct McpToolBridge {
     /// Prefixed tool name: `mcp__<server>__<tool>`.
     prefixed_name: String,
@@ -92,6 +101,19 @@ pub struct McpToolBridge {
     description: String,
     input_schema: serde_json::Value,
     client_slot: Arc<ClientSlot>,
+    /// The manager and the server this bridge belongs to, when the bridge was
+    /// built for a live server. With them, `execute` resolves the calling
+    /// session's own connection — and picks up a restart's new connections,
+    /// and a stop's removal — instead of pinning whatever existed when the
+    /// `ToolRegistry` was last synced.
+    live: Option<LiveServer>,
+}
+
+/// Where a bridge looks up the connection for a session, freshly, per call.
+#[derive(Clone)]
+pub(crate) struct LiveServer {
+    pub(crate) manager: McpManager,
+    pub(crate) server: String,
 }
 
 impl McpToolBridge {
@@ -113,6 +135,15 @@ impl McpToolBridge {
         tool_def: &McpToolDef,
         client_slot: Arc<ClientSlot>,
     ) -> Self {
+        Self::from_slot_tool_with_pool(server_name, tool_def, client_slot, None)
+    }
+
+    fn from_slot_tool_with_pool(
+        server_name: &str,
+        tool_def: &McpToolDef,
+        client_slot: Arc<ClientSlot>,
+        live: Option<LiveServer>,
+    ) -> Self {
         Self {
             prefixed_name: format!("mcp__{}__{}", server_name, tool_def.name),
             original_name: tool_def.name.clone(),
@@ -123,6 +154,7 @@ impl McpToolBridge {
                 .unwrap_or_else(|| format!("MCP tool: {}", tool_def.name)),
             input_schema: tool_def.input_schema.clone(),
             client_slot,
+            live,
         }
     }
 
@@ -144,9 +176,30 @@ impl McpToolBridge {
         tools: &[McpToolDef],
         client_slot: Arc<ClientSlot>,
     ) -> Vec<Self> {
+        Self::from_slot_with_pool(server_name, tools, client_slot, None)
+    }
+
+    /// Bridges that resolve a per-session client on every call.
+    ///
+    /// `client_slot` stays as the fallback for calls made outside any chat
+    /// session (status polling, MCP self-tests, the CLI), which have no
+    /// session identity and no concurrent sibling.
+    pub(crate) fn from_slot_with_pool(
+        server_name: &str,
+        tools: &[McpToolDef],
+        client_slot: Arc<ClientSlot>,
+        live: Option<LiveServer>,
+    ) -> Vec<Self> {
         tools
             .iter()
-            .map(|tool| Self::from_slot_tool(server_name, tool, Arc::clone(&client_slot)))
+            .map(|tool| {
+                Self::from_slot_tool_with_pool(
+                    server_name,
+                    tool,
+                    Arc::clone(&client_slot),
+                    live.clone(),
+                )
+            })
             .collect()
     }
 
@@ -187,6 +240,15 @@ impl McpAgentTool for McpToolBridge {
     }
 
     async fn execute(&self, params: serde_json::Value) -> Result<serde_json::Value> {
+        // Read the calling session before the internal metadata keys are
+        // stripped below: the runner injects `_session_key` into every tool
+        // call, and it is the only session identity that reaches this layer.
+        let session_key = params
+            .get(SESSION_KEY_ARG)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(UNSCOPED_SESSION)
+            .to_string();
+
         // Clean up arguments before forwarding to the MCP server:
         // 1. Strip internal metadata keys (e.g. _session_key) injected by the
         //    agent runner — these break servers with strict validation.
@@ -205,10 +267,26 @@ impl McpAgentTool for McpToolBridge {
             other => other,
         };
 
-        // Resolve the client for every call. Restarts replace the slot's
-        // client instance, while agent turns may retain this bridge for the
-        // lifetime of the turn.
-        let client = self.client_slot.read_client().await.ok_or_else(|| {
+        // Resolve the client for every call. With a session pool the calling
+        // session gets its own connection; without one (and for calls made
+        // outside any session) the process-wide slot is used. Restarts replace
+        // whichever slot's client instance, while agent turns may retain this
+        // bridge for the lifetime of the turn.
+        let slot = match self.live.as_ref() {
+            Some(live) => {
+                // Resolve from the manager on every call: a restart installs new
+                // connections and a stop removes them, and this bridge outlives
+                // both (the `ToolRegistry` keeps it until MCP tools are resynced).
+                live.manager
+                    .client_slot_for_session(&live.server, &session_key)
+                    .await
+                    .ok_or_else(|| {
+                        Error::message(format!("MCP server '{}' is not running", self.server_name))
+                    })?
+            },
+            None => Arc::clone(&self.client_slot),
+        };
+        let client = slot.read_client().await.ok_or_else(|| {
             Error::message(format!("MCP server '{}' is not running", self.server_name))
         })?;
         let result = client.call_tool(&self.original_name, params).await?;

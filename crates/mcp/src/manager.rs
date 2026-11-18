@@ -10,6 +10,7 @@ use std::{
 };
 
 use {
+    futures::future::BoxFuture,
     secrecy::ExposeSecret,
     tokio::sync::RwLock,
     tracing::{info, warn},
@@ -22,7 +23,8 @@ use crate::{
     error::{Context, Error, Result},
     registry::{McpOAuthConfig, McpRegistry, McpServerConfig, TransportType},
     remote::{ResolvedRemoteConfig, header_names, sanitize_url_for_display},
-    tool_bridge::McpToolBridge,
+    session_pool::{DEFAULT_MAX_SESSION_CONNECTIONS, SessionConnector, SessionPool},
+    tool_bridge::{LiveServer, McpToolBridge},
     traits::McpClientTrait,
     transport::StdioLaunchOptions,
     types::{McpManagerError, McpToolDef, McpTransportError},
@@ -70,9 +72,33 @@ struct McpManagerInner {
 }
 
 /// Manages the lifecycle of multiple MCP server connections.
+///
+/// Cloning is cheap (one `Arc`). Per-session connections need to call back into
+/// the manager from a connection factory, and tool bridges hold a manager so
+/// they can resolve the calling session's own connection at call time; both
+/// want a shareable handle rather than a self-reference, because the manager is
+/// built before anyone wraps it in `Arc`.
+#[derive(Clone)]
 pub struct McpManager {
+    shared: Arc<McpManagerState>,
+}
+
+impl std::ops::Deref for McpManager {
+    type Target = McpManagerState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.shared
+    }
+}
+
+/// The manager's mutable state, split out of [`McpManager`] so it can be shared
+/// by cheap clones (see the note on [`McpManager`]).
+pub struct McpManagerState {
     inner: RwLock<McpManagerInner>,
     request_timeout_secs: AtomicU64,
+    /// Per-session connections, keyed by server name. Present for every server
+    /// that is currently running; removed when it stops.
+    session_pools: RwLock<HashMap<String, Arc<SessionPool>>>,
 }
 
 fn env_names(config: &McpServerConfig) -> Vec<String> {
@@ -104,14 +130,17 @@ impl McpManager {
     ) -> Self {
         let request_timeout_secs = request_timeout.as_secs().max(1);
         Self {
-            inner: RwLock::new(McpManagerInner {
-                clients: HashMap::new(),
-                tools: HashMap::new(),
-                registry,
-                auth_providers: HashMap::new(),
-                env_overrides,
+            shared: Arc::new(McpManagerState {
+                inner: RwLock::new(McpManagerInner {
+                    clients: HashMap::new(),
+                    tools: HashMap::new(),
+                    registry,
+                    auth_providers: HashMap::new(),
+                    env_overrides,
+                }),
+                request_timeout_secs: AtomicU64::new(request_timeout_secs),
+                session_pools: RwLock::new(HashMap::new()),
             }),
-            request_timeout_secs: AtomicU64::new(request_timeout_secs),
         }
     }
 
@@ -241,30 +270,16 @@ impl McpManager {
         Ok(())
     }
 
-    pub async fn start_server_with_options(
+    /// Open one connection to a configured server.
+    ///
+    /// Shared by the primary server slot and by every per-session connection,
+    /// so both paths get identical transport, OAuth and timeout behaviour.
+    async fn connect_transport(
         &self,
         name: &str,
         config: &McpServerConfig,
         stdio_options: &StdioLaunchOptions,
-    ) -> Result<()> {
-        // Keep the per-server slot stable across restarts so retained tool
-        // bridges can follow the replacement connection.
-        let slot = {
-            let mut inner = self.inner.write().await;
-            inner.tools.remove(name);
-            Arc::clone(
-                inner
-                    .clients
-                    .entry(name.to_string())
-                    .or_insert_with(|| Arc::new(ClientSlot::empty())),
-            )
-        };
-        if let Some(client) = slot.take().await {
-            let mut client = client.write().await;
-            client.shutdown().await;
-        }
-
-        // Network work happens outside the lock.
+    ) -> Result<(McpClient, Option<SharedAuthProvider>)> {
         let (client, auth_provider) = match config.transport {
             TransportType::Sse => {
                 let env_overrides = {
@@ -537,6 +552,41 @@ impl McpManager {
                 (client, None)
             },
         };
+        Ok((client, auth_provider))
+    }
+
+    pub async fn start_server_with_options(
+        &self,
+        name: &str,
+        config: &McpServerConfig,
+        stdio_options: &StdioLaunchOptions,
+    ) -> Result<()> {
+        // Keep the per-server slot stable across restarts so retained tool
+        // bridges can follow the replacement connection.
+        let slot = {
+            let mut inner = self.inner.write().await;
+            inner.tools.remove(name);
+            Arc::clone(
+                inner
+                    .clients
+                    .entry(name.to_string())
+                    .or_insert_with(|| Arc::new(ClientSlot::empty())),
+            )
+        };
+        if let Some(client) = slot.take().await {
+            let mut client = client.write().await;
+            client.shutdown().await;
+        }
+
+        // Network work happens outside the lock.
+        let (client, auth_provider) = self.connect_transport(name, config, stdio_options).await?;
+
+        // Per-session connections for this server. Rebuilding the pool on every
+        // start (rather than reusing it) is what makes a restart safe: the
+        // previous pool's connections were opened against the transport that
+        // was just torn down, and their `kill()` would race the new one.
+        self.install_session_pool(name, config, stdio_options)
+            .await?;
 
         // Fetch tools.
         let mut client = client;
@@ -555,10 +605,64 @@ impl McpManager {
             .await
     }
 
+    /// Create the per-session pool for a running server and register it.
+    ///
+    /// The connector closes over a clone of this manager, which is cheap: the
+    /// state is behind one `Arc`, so a session connection sees exactly the same
+    /// registry, env overrides and auth providers as the primary slot.
+    async fn install_session_pool(
+        &self,
+        name: &str,
+        config: &McpServerConfig,
+        stdio_options: &StdioLaunchOptions,
+    ) -> Result<()> {
+        let manager = self.clone();
+        let server = name.to_string();
+        let config = config.clone();
+        let stdio_options = stdio_options.clone();
+
+        let connector: SessionConnector = Arc::new(move || {
+            let manager = manager.clone();
+            let server = server.clone();
+            let config = config.clone();
+            let stdio_options = stdio_options.clone();
+            let future: BoxFuture<'static, Result<SharedMcpClient>> = Box::pin(async move {
+                let (mut client, _auth) = manager
+                    .connect_transport(&server, &config, &stdio_options)
+                    .await?;
+                // A session connection must be usable immediately, and its tool
+                // list is what the bridge later refers to by name.
+                client.list_tools().await?;
+                Ok(Arc::new(RwLock::new(client)) as SharedMcpClient)
+            });
+            future
+        });
+
+        let pool = Arc::new(SessionPool::new(
+            name.to_string(),
+            connector,
+            DEFAULT_MAX_SESSION_CONNECTIONS,
+        ));
+        self.session_pools
+            .write()
+            .await
+            .insert(name.to_string(), pool);
+        Ok(())
+    }
+
+    /// Remove and shut down a server's per-session connections.
+    async fn remove_session_pool(&self, name: &str) {
+        let pool = self.session_pools.write().await.remove(name);
+        if let Some(pool) = pool {
+            pool.shutdown_all().await;
+        }
+    }
+
     /// Stop a server connection.
     pub async fn stop_server(&self, name: &str) {
         // Atomically remove client and tools, then drop the lock before async shutdown.
         // Keep auth_providers for potential reconnection.
+        self.remove_session_pool(name).await;
         let slot = {
             let mut inner = self.inner.write().await;
             inner.tools.remove(name);
@@ -723,17 +827,66 @@ impl McpManager {
     }
 
     /// Get tool bridges for all running servers (for registration into ToolRegistry).
+    ///
+    /// Every bridge resolves its client per chat session through this manager,
+    /// so two concurrent turns never share one MCP connection and a restart or
+    /// stop is picked up without re-syncing the registry.
     pub async fn tool_bridges(&self) -> Vec<McpToolBridge> {
         let inner = self.inner.read().await;
         let mut bridges = Vec::new();
 
         for (name, slot) in &inner.clients {
             if let Some(tool_defs) = inner.tools.get(name) {
-                bridges.extend(McpToolBridge::from_slot(name, tool_defs, Arc::clone(slot)));
+                bridges.extend(McpToolBridge::from_slot_with_pool(
+                    name,
+                    tool_defs,
+                    Arc::clone(slot),
+                    Some(self.live_server(name)),
+                ));
             }
         }
 
         bridges
+    }
+
+    /// Tool bridges for one running server, resolving per chat session.
+    pub async fn tool_bridges_for(&self, name: &str) -> Vec<McpToolBridge> {
+        let inner = self.inner.read().await;
+        match (inner.clients.get(name), inner.tools.get(name)) {
+            (Some(slot), Some(tool_defs)) => McpToolBridge::from_slot_with_pool(
+                name,
+                tool_defs,
+                Arc::clone(slot),
+                Some(self.live_server(name)),
+            ),
+            _ => Vec::new(),
+        }
+    }
+
+    fn live_server(&self, name: &str) -> LiveServer {
+        LiveServer {
+            manager: self.clone(),
+            server: name.to_string(),
+        }
+    }
+
+    /// The client slot a chat session should use for one server.
+    ///
+    /// Opens the session's own connection on first use. Returns `None` when the
+    /// server is not running, so a bridge retained across a stop reports that
+    /// instead of silently recreating a connection to a server the operator
+    /// shut down.
+    pub(crate) async fn client_slot_for_session(
+        &self,
+        name: &str,
+        session_key: &str,
+    ) -> Option<Arc<ClientSlot>> {
+        let pool = self.session_pools.read().await.get(name).cloned()?;
+        // Guard the running state: `SessionPool` alone would happily connect.
+        if !self.inner.read().await.clients.contains_key(name) {
+            return None;
+        }
+        pool.client_for_session(session_key).await
     }
 
     /// Get tools for a specific server.

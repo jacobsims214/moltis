@@ -19,6 +19,7 @@ pub mod legacy_sse_transport;
 pub mod manager;
 pub mod registry;
 pub mod remote;
+mod session_pool;
 pub mod sse_transport;
 pub mod tool_bridge;
 pub mod traits;

@@ -26,6 +26,7 @@ url            = { workspace = true }
 uuid           = { workspace = true }
 
 [dev-dependencies]
+axum       = { workspace = true }
 mockito    = { workspace = true }
 tempfile   = { workspace = true }
 tokio-test = { workspace = true }
